@@ -19,6 +19,9 @@ def client():
         "/apiXYZ",
         "/api/v1/nonexistent-endpoint/",
         "/api/schema/nonexistent/",
+        # OpenAPI schema and Swagger UI are only routed when DEBUG=True
+        "/api/schema/",
+        "/api/schema/swagger/",
         "/nonexistent-path/",
         "/unknown/sub/path",
     ],

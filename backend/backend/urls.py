@@ -28,8 +28,6 @@ from core.views import (CustomTokenObtainPairView, LanguagesView, LogoutView, Pu
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api-auth/', include('rest_framework.urls')),
-    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('api/schema/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/v1/languages/', LanguagesView.as_view(), name='languages'),
     path('api/v1/public/settings/', PublicSettingsView.as_view(), name='public_settings'),
     path('api/v1/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
@@ -47,4 +45,11 @@ urlpatterns = [
 ]
 
 if settings.DEBUG:
+    # The OpenAPI schema and Swagger UI are development aids only; they are
+    # not exposed in production. `manage.py spectacular` still generates the
+    # schema file offline (see `make api.schema`).
+    urlpatterns += [
+        path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+        path('api/schema/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    ]
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
