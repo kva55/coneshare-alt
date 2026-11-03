@@ -151,20 +151,6 @@ describe('ShareLinkViewerPage', () => {
     expect(screen.getByText('This link is expired.')).toBeInTheDocument();
   });
 
-  it('localizes error messages using getLocalizedErrorMessage', async () => {
-    api.getShareLinkPublicMeta.mockResolvedValue({ data: mockPublicMeta });
-    api.getShareLinkViewData.mockRejectedValue({
-      response: { data: { message: 'This link has expired.' } },
-    });
-
-    await i18n.changeLanguage('zh-hans');
-    renderComponent('/view/test-slug');
-
-    await waitFor(() => {
-      expect(screen.getByText('此链接已到期。')).toBeInTheDocument();
-    });
-  });
-
   it('renders PasswordForm when protectionType is password', async () => {
     api.getShareLinkPublicMeta.mockResolvedValue({ data: mockPublicMeta });
     api.getShareLinkViewData.mockRejectedValue({
@@ -436,43 +422,6 @@ describe('ShareLinkViewerPage', () => {
      expect(screen.queryByText(/Owner Preview Mode:/)).not.toBeInTheDocument();
     });
 
-    it('renders localized preview banner in Chinese when language is switched', async () => {
-      const mockWriteText = vi.fn().mockResolvedValue(undefined);
-      Object.assign(navigator, {
-        clipboard: {
-          writeText: mockWriteText,
-        },
-      });
-
-      await i18n.changeLanguage('zh-hans');
-      api.getShareLinkPublicMeta.mockResolvedValue({ data: mockPublicMeta });
-      api.getShareLinkViewData.mockResolvedValue({ data: mockDocumentData });
-      api.createViewSession.mockResolvedValue({ data: mockViewData });
-
-      renderComponent('/view/test-slug?previewToken=test-preview-token');
-
-      await waitFor(() => {
-        expect(screen.getByText(/所有者预览模式：/)).toBeInTheDocument();
-      });
-
-      const copyButton = screen.getByRole('button', { name: /复制原始链接/i });
-      expect(copyButton).toBeInTheDocument();
-
-      fireEvent.click(copyButton);
-      expect(mockWriteText).toHaveBeenCalled();
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: /已复制！/i })).toBeInTheDocument();
-      });
-
-      const dismissButton = screen.getByTitle('关闭横幅');
-      expect(dismissButton).toBeInTheDocument();
-
-      fireEvent.click(dismissButton);
-      expect(screen.queryByText(/所有者预览模式：/)).not.toBeInTheDocument();
-
-      await i18n.changeLanguage('en');
-    });
-
     it('does not trigger duplicate view-data or record-visit calls when clicking a document in sidebar', async () => {
       api.getShareLinkPublicMeta.mockResolvedValue({ data: mockPublicMeta });
       
@@ -635,29 +584,6 @@ describe('ShareLinkViewerPage', () => {
       ).toBeInTheDocument();
       // Ensure owner name is not leaked
       expect(screen.queryByText('Alice Owner')).not.toBeInTheDocument();
-    });
-
-    it('renders localized link expired UI when language is zh-hans', async () => {
-      await i18n.changeLanguage('zh-hans');
-      api.getShareLinkPublicMeta.mockRejectedValue({
-        response: { status: 410, data: { message: 'This link has expired.' } },
-      });
-      api.getShareLinkViewData.mockRejectedValue({
-        response: { status: 410, data: { message: 'This link has expired.' } },
-      });
-
-      renderComponent('/view/test-slug');
-
-      await waitFor(() => {
-        expect(screen.getByText('此链接已过期')).toBeInTheDocument();
-      });
-
-      expect(
-        screen.getByText('该分享链接已超过有效期，无法继续访问。')
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText('如需查看该内容，请联系文档所有者获取最新链接。')
-      ).toBeInTheDocument();
     });
 
     it('normalizes string error response and renders error screen without throwing', async () => {

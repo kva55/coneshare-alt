@@ -22,6 +22,11 @@ export function LanguagePicker({ className = '' }) {
 
   const currentLang = resolveLanguage((i18n.language || 'en').toLowerCase());
 
+  // Nothing to pick from while only one language ships.
+  if (SUPPORTED_LANGUAGES.length < 2) {
+    return null;
+  }
+
   return (
     <div className={`inline-flex items-center gap-1.5 text-xs text-muted-foreground ${className}`}>
       <Globe className="h-3.5 w-3.5" />

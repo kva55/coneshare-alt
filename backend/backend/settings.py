@@ -279,13 +279,9 @@ if not AUTH_PASSWORD_VALIDATORS:
 
 LANGUAGE_CODE = 'en-us'
 
+# The application ships in English only.
 LANGUAGES = [
     ('en', _('English')),
-    ('zh-hans', _('Simplified Chinese')),
-    ('ru', _('Russian')),
-    ('de', _('German')),
-    ('fr', _('French')),
-    ('nl', _('Dutch')),
 ]
 
 LOCALE_PATHS = [

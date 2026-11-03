@@ -215,20 +215,6 @@ describe('DocumentPage', () => {
       expect(await screen.findByText('Documents Page')).toBeInTheDocument();
     });
 
-    it('handles document renaming with localized toast', async () => {
-      await i18n.changeLanguage('zh-hans');
-      api.renameDocument.mockResolvedValue({ data: { id: 'doc123', name: 'New Document Name' } });
-
-      renderComponent();
-      const renameButton = await screen.findByRole('button', { name: /rename/i });
-      fireEvent.click(renameButton);
-
-      await waitFor(() => {
-        expect(api.renameDocument).toHaveBeenCalledWith('doc123', 'New Document Name');
-        expect(toast.success).toHaveBeenCalledWith('文档重命名成功。');
-      });
-    });
-
     it('renders collaborator access notice banner when user is not the document owner or admin', async () => {
       mockCurrentUser = { id: 'collab_user', role: 'user' };
       const otherDoc = {

@@ -97,33 +97,4 @@ describe('RenameItemDialog', () => {
     });
   });
 
-  it('displays localized success toast in Simplified Chinese when renaming dataroom', async () => {
-    await i18n.changeLanguage('zh-hans');
-    api.updateDataroom.mockResolvedValue({ data: {} });
-
-    const user = userEvent.setup();
-    render(
-      <RenameItemDialog
-        isOpen={true}
-        onOpenChange={mockOnOpenChange}
-        item={{ id: 'dr-1', name: 'alpha 项目', type: 'Dataroom' }}
-        onSuccess={mockOnSuccess}
-        context="dataroom"
-      />
-    );
-
-    const input = screen.getByDisplayValue('alpha 项目');
-    await user.clear(input);
-    await user.type(input, 'alpha 项目 x');
-
-    const renameBtn = screen.getByRole('button', { name: /重命名/i });
-    fireEvent.click(renameBtn);
-
-    await waitFor(() => {
-      expect(api.updateDataroom).toHaveBeenCalledWith('dr-1', { name: 'alpha 项目 x' });
-      expect(toast.success).toHaveBeenCalledWith('“alpha 项目”已重命名为“alpha 项目 x”。');
-      expect(mockOnSuccess).toHaveBeenCalled();
-      expect(mockOnOpenChange).toHaveBeenCalledWith(false);
-    });
-  });
 });

@@ -1,38 +1,21 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import LanguageDetector from 'i18next-browser-languagedetector';
 
 import en from './locales/en/translation.json';
-import zhHans from './locales/zh-hans/translation.json';
-import ru from './locales/ru/translation.json';
-import de from './locales/de/translation.json';
-import fr from './locales/fr/translation.json';
-import nl from './locales/nl/translation.json';
 
+// The application ships in English only. The i18n layer is kept so that UI
+// strings stay centralized in locales/en/translation.json.
 i18n
-  .use(LanguageDetector)
   .use(initReactI18next)
   .init({
     resources: {
       en: { translation: en },
-      'zh-hans': { translation: zhHans },
-      zh: { translation: zhHans },
-      ru: { translation: ru },
-      de: { translation: de },
-      fr: { translation: fr },
-      nl: { translation: nl },
     },
+    lng: 'en',
     fallbackLng: 'en',
-    load: 'currentOnly',
-    lowerCaseLng: true,
-    supportedLngs: ['en', 'zh-hans', 'zh', 'ru', 'de', 'fr', 'nl'],
+    supportedLngs: ['en'],
     interpolation: {
       escapeValue: false,
-    },
-    detection: {
-      order: ['localStorage', 'navigator'],
-      lookupLocalStorage: 'i18nextLng',
-      caches: ['localStorage'],
     },
   });
 

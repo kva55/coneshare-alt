@@ -15,16 +15,6 @@ def normalize_language_code(code: Optional[str]) -> Optional[str]:
     supported_codes = dict(settings.LANGUAGES)
     if code in supported_codes:
         return code
-    if code.startswith('zh'):
-        return 'zh-hans'
-    if code.startswith('ru'):
-        return 'ru'
-    if code.startswith('de'):
-        return 'de'
-    if code.startswith('fr'):
-        return 'fr'
-    if code.startswith('nl'):
-        return 'nl'
     if code.startswith('en'):
         return 'en'
     prefix = code.split('-')[0]

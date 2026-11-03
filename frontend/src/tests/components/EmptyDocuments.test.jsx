@@ -15,15 +15,4 @@ describe("EmptyDocuments", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders translated text when language is changed", async () => {
-    await i18n.changeLanguage('zh-hans');
-    render(<EmptyDocuments />);
-    expect(
-      screen.getByRole("heading", { name: "暂无文档" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("将文件或文件夹拖放到此处，或使用上传按钮开始。")
-    ).toBeInTheDocument();
-    await i18n.changeLanguage('en');
-  });
 });

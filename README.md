@@ -1,4 +1,3 @@
-English | [中文](./README_zh.md)
 
 ![Coneshare logo](https://raw.githubusercontent.com/coneshare/coneshare/refs/heads/main/coneshare_logo.png)
 

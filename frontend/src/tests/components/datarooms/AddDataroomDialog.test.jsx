@@ -108,30 +108,4 @@ describe('AddDataroomDialog', () => {
     });
   });
 
-  it('displays localized success toast in Simplified Chinese when creating dataroom', async () => {
-    await i18n.changeLanguage('zh-hans');
-    api.createDataroom.mockResolvedValue({ data: { id: 'dr_123' } });
-
-    const user = userEvent.setup();
-    render(
-      <AddDataroomDialog
-        isOpen={true}
-        onOpenChange={mockOnOpenChange}
-        onSuccess={mockOnSuccess}
-      />
-    );
-
-    const input = screen.getByPlaceholderText(/Project Alpha|例如/i);
-    await user.type(input, '新项目');
-
-    const submitBtn = screen.getByRole('button', { name: /创建资料室/i });
-    fireEvent.click(submitBtn);
-
-    await waitFor(() => {
-      expect(api.createDataroom).toHaveBeenCalledWith({ name: '新项目' });
-      expect(toast.success).toHaveBeenCalledWith('资料室创建成功。');
-      expect(mockOnSuccess).toHaveBeenCalled();
-      expect(mockOnOpenChange).toHaveBeenCalledWith(false);
-    });
-  });
 });
