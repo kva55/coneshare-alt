@@ -146,26 +146,9 @@ class Command(BaseCommand):
         # ---------------------------------------------------------
         self.print_section("2. Dataroom Storage & Vault Links")
         total_datarooms = Dataroom.objects.count()
-        v1_count = Dataroom.objects.filter(storage_version=1).count()
-        v2_count = Dataroom.objects.filter(storage_version=2).count()
-        self.print_info(
-            f"Total Datarooms: {total_datarooms} (v1_legacy={v1_count}, v2_vault={v2_count})"
-        )
+        self.print_info(f"Total Datarooms: {total_datarooms}")
 
-        # v1 datarooms must NOT have vault_folder
-        v1_with_vault = list(
-            Dataroom.objects.filter(storage_version=1, vault_folder__isnull=False).values_list(
-                "id", flat=True
-            )[:10]
-        )
-        if v1_with_vault:
-            violations.append(f"Legacy v1 datarooms linked to a vault_folder: {v1_with_vault}")
-            self.print_fail(f"v1 datarooms have vault_folder set: {v1_with_vault}")
-        else:
-            self.print_pass(f"All {v1_count} v1 datarooms isolated from vault_folder links")
-
-        # v2 datarooms check
-        v2_datarooms = Dataroom.objects.filter(storage_version=2).select_related("vault_folder")
+        v2_datarooms = Dataroom.objects.select_related("vault_folder")
         v2_missing_links = []
         v2_inconsistent = []
 
@@ -202,18 +185,18 @@ class Command(BaseCommand):
                     )
 
         if v2_missing_links:
-            violations.append(f"v2 datarooms with unlinked backing folder: {v2_missing_links}")
-            self.print_fail(f"v2 datarooms missing link to existing vault folder: {v2_missing_links}")
+            violations.append(f"Datarooms with unlinked backing folder: {v2_missing_links}")
+            self.print_fail(f"Datarooms missing link to existing vault folder: {v2_missing_links}")
         else:
-            self.print_pass("No unlinked backing folders found for v2 datarooms")
+            self.print_pass("No unlinked backing folders found")
 
         if v2_inconsistent:
             violations.extend(v2_inconsistent)
-            self.print_fail(f"v2 dataroom / vault_folder relationship inconsistencies: {v2_inconsistent}")
+            self.print_fail(f"Dataroom / vault_folder relationship inconsistencies: {v2_inconsistent}")
         else:
             linked_v2 = sum(1 for d in v2_datarooms if d.vault_folder)
             self.print_pass(
-                f"All linked v2 datarooms ({linked_v2}) have consistent vault_folder references"
+                f"All linked datarooms ({linked_v2}) have consistent vault_folder references"
             )
 
         # ---------------------------------------------------------

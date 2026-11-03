@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   UserPlus,
@@ -10,7 +9,6 @@ import {
   Check,
   X,
   Loader2,
-  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -48,7 +46,6 @@ export function ManageCollaboratorsDialog({
 }) {
   const { t } = useTranslation();
   const { user: currentUser } = useUser();
-  const navigate = useNavigate();
 
   const [collaboratorsData, setCollaboratorsData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -198,34 +195,8 @@ export function ManageCollaboratorsDialog({
           </DialogHeader>
 
           <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
-            {dataroom?.storage_version === 1 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300 flex items-start justify-between gap-3">
-                <div className="flex items-start gap-2.5 min-w-0">
-                  <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold">{t('datarooms.legacyStorageTitle')}</p>
-                    <p className="mt-0.5 leading-relaxed">{t('datarooms.upgradeRequiredForCollaboration')}</p>
-                  </div>
-                </div>
-                {canManage && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 h-7 px-2.5 text-xs border-amber-300 bg-amber-100/50 text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
-                    onClick={() => {
-                      onOpenChange(false);
-                      navigate(`/datarooms/${dataroom.id}?tab=settings`);
-                    }}
-                  >
-                    {t('datarooms.goToSettings')}
-                  </Button>
-                )}
-              </div>
-            )}
-
-            {/* Add Collaborators section (Owner / Org Admin only, v2 only) */}
-            {canManage && dataroom?.storage_version !== 1 && (
+            {/* Add Collaborators section (Owner / Org Admin only) */}
+            {canManage && (
               <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
                 <label className="text-sm font-medium text-foreground">
                   {t('datarooms.addCollaborator')}

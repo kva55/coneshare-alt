@@ -13,7 +13,6 @@ from documents.services import (
 )
 
 from .models import Dataroom, DataroomDocument, DataroomFolder
-from .utils import get_dataroom_storage_folder_name
 
 logger = logging.getLogger(__name__)
 
@@ -39,77 +38,46 @@ def touch_dataroom_folder_ancestors(folder: DataroomFolder | None):
 
 def get_or_create_dataroom_storage_folder(dataroom: Dataroom, requesting_user=None, relative_path=None) -> Folder:
     """
-    Resolves or creates the physical Folder structure for a Dataroom based on its storage_version:
-    - v2 (Modern System Vault): Org Root -> '__datarooms__' (created_by=None) -> '<dataroom_id>' (created_by=None) -> relative subfolders.
-    - v1 (Legacy User-Scoped): Org Root -> 'Dataroom Uploads' -> '<Name> (<ID>)' -> relative subfolders.
+    Resolves or creates the physical Folder structure for a Dataroom (system vault):
+    Org Root -> '__datarooms__' (created_by=None) -> '<dataroom_id>' (created_by=None) -> relative subfolders.
+    `requesting_user` is accepted for call-site compatibility and is not used.
     """
     organization = dataroom.organization
     root_folder = Folder.objects.get_root_for_org(organization)
 
-    if dataroom.storage_version >= 2:
-        # V2: System Storage Vault
-        if dataroom.vault_folder:
-            dataroom_folder = dataroom.vault_folder
-        else:
-            system_vault, _ = Folder.objects.get_or_create(
-                organization=organization,
-                parent=root_folder,
-                name="__datarooms__",
-                created_by=None,
-                folder_type=Folder.FOLDER_TYPE_VAULT,
-            )
-            dataroom_folder, _ = Folder.objects.get_or_create(
-                organization=organization,
-                parent=system_vault,
-                name=str(dataroom.id),
-                created_by=None,
-                folder_type=Folder.FOLDER_TYPE_VAULT,
-            )
-            dataroom.vault_folder = dataroom_folder
-            dataroom.save(update_fields=['vault_folder'])
-
-        current_folder = dataroom_folder
-
-        if relative_path:
-            folder_path, _ = os.path.split(relative_path)
-            if folder_path:
-                path_parts = Path(folder_path).parts
-                for part in path_parts:
-                    current_folder, _ = Folder.get_or_create_vault_subfolder(
-                        organization=organization,
-                        parent=current_folder,
-                        name=part,
-                    )
-        return current_folder
+    if dataroom.vault_folder:
+        dataroom_folder = dataroom.vault_folder
     else:
-        # V1: Legacy User-Scoped Storage
-        creator = dataroom.created_by or requesting_user
-        dataroom_uploads_folder, _ = Folder.objects.get_or_create(
+        system_vault, _ = Folder.objects.get_or_create(
             organization=organization,
             parent=root_folder,
-            name="Dataroom Uploads",
-            created_by=creator
+            name="__datarooms__",
+            created_by=None,
+            folder_type=Folder.FOLDER_TYPE_VAULT,
         )
         dataroom_folder, _ = Folder.objects.get_or_create(
             organization=organization,
-            parent=dataroom_uploads_folder,
-            name=get_dataroom_storage_folder_name(dataroom.name, dataroom),
-            created_by=creator
+            parent=system_vault,
+            name=str(dataroom.id),
+            created_by=None,
+            folder_type=Folder.FOLDER_TYPE_VAULT,
         )
-        current_folder = dataroom_folder
+        dataroom.vault_folder = dataroom_folder
+        dataroom.save(update_fields=['vault_folder'])
 
-        if relative_path:
-            folder_path, _ = os.path.split(relative_path)
-            if folder_path:
-                path_parts = Path(folder_path).parts
-                for part in path_parts:
-                    current_folder, _ = Folder.objects.get_or_create(
-                        organization=organization,
-                        parent=current_folder,
-                        name=part,
-                        defaults={'created_by': creator}
-                    )
-        return current_folder
+    current_folder = dataroom_folder
+
+    if relative_path:
+        folder_path, _ = os.path.split(relative_path)
+        if folder_path:
+            path_parts = Path(folder_path).parts
+            for part in path_parts:
+                current_folder, _ = Folder.get_or_create_vault_subfolder(
+                    organization=organization,
+                    parent=current_folder,
+                    name=part,
+                )
+    return current_folder
 
 
 def delete_dataroom(dataroom: Dataroom):
@@ -117,7 +85,7 @@ def delete_dataroom(dataroom: Dataroom):
     Explicitly deletes a Dataroom:
     1. Removes all dataroom items using reference-aware cleanup (preserving documents
        that are linked in other datarooms).
-    2. Deletes backing storage folder (__datarooms__/<id> for v2, or 'Dataroom Uploads'/<Name> for v1).
+    2. Deletes the backing system vault folder (__datarooms__/<id>).
     3. Deletes the Dataroom model record.
     """
     organization = dataroom.organization
@@ -129,9 +97,8 @@ def delete_dataroom(dataroom: Dataroom):
     if all_doc_ids or all_folder_ids:
         remove_dataroom_content(dataroom, dataroom_doc_ids=all_doc_ids, dataroom_folder_ids=all_folder_ids)
 
-    # 2. Clean up backing storage folder (both modern system vault and legacy uploads)
+    # 2. Clean up the backing system vault folder
     if root_folder:
-        # Modern v2 system vault cleanup
         storage_folder = dataroom.vault_folder
         system_vault = None
         if not storage_folder:
@@ -175,147 +142,10 @@ def delete_dataroom(dataroom: Dataroom):
             try:
                 Folder.objects.filter(id__in=[f.id for f in folders_to_delete]).delete()
             except Exception as e:
-                logger.exception("Failed to clean up v2 system vault folder for dataroom %s: %s", dataroom.id, e)
-
-        # Legacy v1 uploads cleanup
-        dataroom_uploads_query = Folder.objects.filter(
-            organization=organization,
-            parent=root_folder,
-            name="Dataroom Uploads"
-        )
-        target_folder_name = get_dataroom_storage_folder_name(dataroom.name, dataroom)
-        dataroom_folders = Folder.objects.filter(
-            organization=organization,
-            parent__in=dataroom_uploads_query,
-            name=target_folder_name
-        )
-        for dataroom_folder in dataroom_folders:
-            dataroom_uploads_folder = dataroom_folder.parent
-            descendants = dataroom_folder.get_descendants()
-            folders_to_check = [dataroom_folder] + descendants
-
-            # Relocate surviving shared documents to parent 'Dataroom Uploads' with unique names
-            # before deleting the legacy folder tree.
-            remaining_docs = list(
-                Document.objects.filter(folder__in=folders_to_check).select_related('created_by')
-            )
-            for doc in remaining_docs:
-                unique_name = _get_unique_document_name(doc.created_by, dataroom_uploads_folder, doc.name)
-                doc.name = unique_name
-                doc.folder = dataroom_uploads_folder
-                doc.save(update_fields=['name', 'folder'])
-            try:
-                Folder.objects.filter(id__in=[f.id for f in folders_to_check]).delete()
-            except Exception as e:
-                logger.exception("Failed to clean up v1 backing folder %s for dataroom %s: %s", dataroom_folder.id, dataroom.id, e)
+                logger.exception("Failed to clean up system vault folder for dataroom %s: %s", dataroom.id, e)
 
     # 3. Delete the Dataroom record
     dataroom.delete()
-
-
-def upgrade_dataroom_to_v2(dataroom: Dataroom) -> bool:
-    """
-    Upgrades a legacy (v1) Dataroom to modern (v2) System Storage Vault architecture:
-    1. Creates/ensures '__datarooms__/<dataroom_id>' system vault folder.
-    2. Moves any existing legacy backing subfolders & documents under 'Dataroom Uploads' to the vault.
-    3. Cleans up empty legacy folders.
-    4. Sets dataroom.storage_version = 2.
-    """
-    if dataroom.storage_version >= 2:
-        return True
-
-    organization = dataroom.organization
-    root_folder = Folder.objects.get_root_for_org(organization)
-    if not root_folder:
-        return False
-
-    with transaction.atomic():
-        locked_dataroom = Dataroom.objects.select_for_update().get(id=dataroom.id)
-        if locked_dataroom.storage_version >= 2:
-            dataroom.storage_version = locked_dataroom.storage_version
-            return True
-
-        # 1. Ensure system vault folder
-        system_vault, _ = Folder.objects.get_or_create(
-            organization=organization,
-            parent=root_folder,
-            name="__datarooms__",
-            created_by=None,
-            folder_type=Folder.FOLDER_TYPE_VAULT,
-        )
-        vault_room_folder, _ = Folder.objects.get_or_create(
-            organization=organization,
-            parent=system_vault,
-            name=str(dataroom.id),
-            created_by=None,
-            folder_type=Folder.FOLDER_TYPE_VAULT,
-        )
-
-        # 2. Locate legacy backing folders
-        legacy_uploads = Folder.objects.filter(
-            organization=organization,
-            parent=root_folder,
-            name="Dataroom Uploads"
-        )
-        legacy_name = get_dataroom_storage_folder_name(dataroom.name, dataroom)
-        legacy_folders = list(Folder.objects.filter(
-            organization=organization,
-            parent__in=legacy_uploads,
-            name=legacy_name
-        ))
-
-        # 3. Move direct contents into the system vault
-        affected_users = set()
-        if locked_dataroom.created_by:
-            affected_users.add(locked_dataroom.created_by)
-
-        for old_folder in legacy_folders:
-            all_descendants = old_folder.get_descendants()
-            all_folder_ids = [old_folder.id] + [f.id for f in all_descendants]
-            for creator in User.objects.filter(documents_created__folder_id__in=all_folder_ids).distinct():
-                affected_users.add(creator)
-
-            # Move child documents individually, ensuring unique names in vault_room_folder
-            child_docs = list(Document.objects.filter(folder=old_folder).select_related('created_by'))
-            for doc in child_docs:
-                unique_name = _get_unique_document_name(doc.created_by, vault_room_folder, doc.name)
-                doc.name = unique_name
-                doc.folder = vault_room_folder
-                doc.save(update_fields=['name', 'folder'])
-
-            # Move child subfolders individually, ensuring unique names in vault_room_folder
-            child_folders = list(Folder.objects.filter(parent=old_folder).select_related('created_by'))
-            for subf in child_folders:
-                unique_folder_name = _get_unique_folder_name(None, vault_room_folder, subf.name)
-                subf.name = unique_folder_name
-                subf.parent = vault_room_folder
-                subf.folder_type = Folder.FOLDER_TYPE_VAULT
-                subf.created_by = None
-                subf.save(update_fields=['name', 'parent', 'created_by', 'folder_type'])
-
-            # Ensure all deeper descendant folders also adhere to vault invariant
-            deeper_descendant_ids = [f.id for f in all_descendants if f.parent_id != old_folder.id]
-            if deeper_descendant_ids:
-                Folder.objects.filter(id__in=deeper_descendant_ids).update(
-                    folder_type=Folder.FOLDER_TYPE_VAULT,
-                    created_by=None,
-                )
-
-            # Delete the empty legacy folder shell
-            old_folder.delete()
-
-        # 4. Mark storage_version as 2 and link vault_folder
-        locked_dataroom.storage_version = 2
-        locked_dataroom.vault_folder = vault_room_folder
-        locked_dataroom.save(update_fields=['storage_version', 'vault_folder', 'updated_at'])
-        dataroom.storage_version = 2
-        dataroom.vault_folder = vault_room_folder
-
-        # 5. Automatically free personal quota for uploaders whose legacy documents moved to the vault
-        for u in affected_users:
-            recalculate_user_document_size(u)
-
-    return True
 
 
 def remove_dataroom_content(dataroom: Dataroom, dataroom_doc_ids: list = None, dataroom_folder_ids: list = None):
@@ -404,10 +234,9 @@ def remove_dataroom_content(dataroom: Dataroom, dataroom_doc_ids: list = None, d
             touch_dataroom_folder_ancestors(parent_folder)
 
     # Delete backing documents and storage files for direct uploads with no other references (non-blocking)
-    is_vault = (dataroom.storage_version >= 2)
     for doc in backing_docs_to_delete:
         try:
-            delete_document_and_files(doc, is_vault=is_vault)
+            delete_document_and_files(doc, is_vault=True)
         except Exception as e:
             logger.exception("Failed to clean up backing document %s: %s", doc.id, e)
 
@@ -436,7 +265,7 @@ def is_direct_upload_dataroom_document(ddoc: DataroomDocument) -> bool:
         storage_root_ids = set(Folder.objects.filter(
             organization=doc.organization,
             parent=root_folder,
-            name__in=["__datarooms__", "Dataroom Uploads"]
+            name="__datarooms__"
         ).values_list('id', flat=True))
 
         curr = doc.folder
@@ -460,34 +289,6 @@ def is_direct_upload_dataroom_document(ddoc: DataroomDocument) -> bool:
     return is_direct
 
 
-def sync_dataroom_rename(dataroom: Dataroom, old_name: str):
-    """
-    Synchronizes physical storage folders when a Dataroom is renamed:
-    - v2 (Modern System Vault): No-op because storage folder is immutable '__datarooms__/<dataroom_id>/'.
-    - v1 (Legacy User-Scoped): Renames legacy folders under 'Dataroom Uploads'.
-    """
-    if dataroom.storage_version >= 2 or dataroom.name == old_name:
-        return
-
-    organization = dataroom.organization
-    root_folder = Folder.objects.get_root_for_org(organization)
-    if not root_folder:
-        return
-
-    dataroom_uploads_folders = Folder.objects.filter(
-        organization=organization,
-        parent=root_folder,
-        name="Dataroom Uploads"
-    )
-    old_storage_name = get_dataroom_storage_folder_name(old_name, dataroom)
-    new_storage_name = get_dataroom_storage_folder_name(dataroom.name, dataroom)
-    Folder.objects.filter(
-        organization=organization,
-        parent__in=dataroom_uploads_folders,
-        name=old_storage_name
-    ).update(name=new_storage_name)
-
-
 def sync_dataroom_folder_rename(dfolder: DataroomFolder, old_name: str, new_name: str):
     """
     Synchronizes the backing physical Folder name when a visual DataroomFolder is renamed.
@@ -508,15 +309,11 @@ def sync_dataroom_folder_rename(dfolder: DataroomFolder, old_name: str, new_name
         names.insert(0, curr.name)
         curr = curr.parent
 
-    if dataroom.storage_version >= 2:
-        if dataroom.vault_folder:
-            curr_folder = dataroom.vault_folder
-            path_names = names + [old_name]
-        else:
-            path_names = ["__datarooms__", str(dataroom.id)] + names + [old_name]
-            curr_folder = root_folder
+    if dataroom.vault_folder:
+        curr_folder = dataroom.vault_folder
+        path_names = names + [old_name]
     else:
-        path_names = ["Dataroom Uploads", get_dataroom_storage_folder_name(dataroom.name, dataroom)] + names + [old_name]
+        path_names = ["__datarooms__", str(dataroom.id)] + names + [old_name]
         curr_folder = root_folder
 
     for name in path_names:

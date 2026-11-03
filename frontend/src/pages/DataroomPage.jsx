@@ -3,11 +3,11 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSortedList } from '../hooks/useSortedList';
 import { useItemSelection } from '../hooks/useItemSelection';
-import { ShareIcon, Star, ArrowLeft, ChevronDown, FolderUp, Plus, Loader2, AlertTriangle, Crown, Users, Sparkles } from 'lucide-react';
+import { ShareIcon, Star, ArrowLeft, ChevronDown, FolderUp, Plus, Loader2, Crown, Users, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatBytes } from '../lib/formatters';
 import { isDataroomOwner, isDataroomCollaborator } from '../utils/formatters';
-import { getDataroom, addContentToDataroom, createDataroomFolder, moveDataroomContent, getDataroomFolderContents, getShareLinksForDataroom, deleteShareLink, getDataroomViewSessions, getDataroomStats, removeContentFromDataroom, updateDataroomFolder, updateDataroomDocument, updateDataroomBranding, reorderDataroomItems, deleteDataroom, ensureDataroomFolderPaths, uploadDataroomDocument, upgradeDataroomStorage, getDataroomBannerImages } from '../services/api';
+import { getDataroom, addContentToDataroom, createDataroomFolder, moveDataroomContent, getDataroomFolderContents, getShareLinksForDataroom, deleteShareLink, getDataroomViewSessions, getDataroomStats, removeContentFromDataroom, updateDataroomFolder, updateDataroomDocument, updateDataroomBranding, reorderDataroomItems, deleteDataroom, ensureDataroomFolderPaths, uploadDataroomDocument, getDataroomBannerImages } from '../services/api';
 import { useBreadcrumb } from '../components/layout/BreadcrumbProvider';
 import { useUpload } from '../contexts/UploadProvider';
 import { useUser } from '../contexts/UserProvider';
@@ -128,8 +128,6 @@ export function DataroomPage() {
   const [isSavingEnableQna, setIsSavingEnableQna] = useState(false);
   const [storageQuotaMb, setStorageQuotaMb] = useState(0);
   const [isSavingStorageQuota, setIsSavingStorageQuota] = useState(false);
-  const [isUpgradingStorage, setIsUpgradingStorage] = useState(false);
-  const [isUpgradeStorageDialogOpen, setIsUpgradeStorageDialogOpen] = useState(false);
   const [isDeleteDataroomDialogOpen, setIsDeleteDataroomDialogOpen] = useState(false);
   const [deleteConfirmationName, setDeleteConfirmationName] = useState('');
   const [isDeletingDataroom, setIsDeletingDataroom] = useState(false);
@@ -845,19 +843,6 @@ export function DataroomPage() {
       // Error toast handled by interceptor
     } finally {
       setIsSavingStorageQuota(false);
-    }
-  };
-
-  const handleUpgradeStorage = async () => {
-    setIsUpgradingStorage(true);
-    try {
-      const response = await upgradeDataroomStorage(dataroomId);
-      setDataroom(response.data);
-      toast.success(t('datarooms.upgradeStorageSuccess'));
-    } catch (error) {
-      // Error toast handled by interceptor
-    } finally {
-      setIsUpgradingStorage(false);
     }
   };
 
@@ -1611,34 +1596,6 @@ export function DataroomPage() {
               </div>
             </div>
 
-            {dataroom?.storage_version === 1 && (
-              <div className="pb-6 border-b border-amber-200 dark:border-amber-900/50">
-                <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/50 dark:bg-amber-950/20">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-2">
-                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                        {t('datarooms.legacyStorageTitle')}
-                      </h3>
-                      <p className="mt-1 text-xs sm:text-sm text-amber-800 dark:text-amber-300">
-                        {t('datarooms.legacyStorageNotice')}
-                      </p>
-                    </div>
-                    {canManage && (
-                      <Button
-                        size="sm"
-                        onClick={() => setIsUpgradeStorageDialogOpen(true)}
-                        disabled={isUpgradingStorage}
-                        className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white"
-                      >
-                        {isUpgradingStorage ? t('datarooms.upgradingStorage') : t('datarooms.upgradeToModernStorage')}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
             <div className="pb-6 border-b border-gray-200 dark:border-gray-800 space-y-4">
               <div>
                 <h3 className="text-sm font-semibold">
@@ -1952,19 +1909,6 @@ export function DataroomPage() {
         title={t('datarooms.removeItemTitle', { name: itemToRemove?.name })}
         description={t('datarooms.removeItemDescription')}
         confirmText={t('datarooms.remove')}
-      />
-      <ConfirmationDialog
-        isOpen={isUpgradeStorageDialogOpen}
-        onOpenChange={setIsUpgradeStorageDialogOpen}
-        onConfirm={async () => {
-          setIsUpgradeStorageDialogOpen(false);
-          await handleUpgradeStorage();
-        }}
-        title={t('datarooms.upgradeStorageConfirmTitle')}
-        description={t('datarooms.upgradeStorageConfirmMessage')}
-        confirmText={t('datarooms.upgradeToModernStorage')}
-        variant="default"
-        isLoading={isUpgradingStorage}
       />
       <Dialog
         open={isDeleteDataroomDialogOpen}

@@ -463,7 +463,6 @@ class TestCreateNewDocumentVersion:
             organization=user.organization,
             created_by=user,
             storage_quota_mb=1,  # 1 MB quota limit
-            storage_version=2,
         )
         root_folder = Folder.objects.create(
             name="__root__",
@@ -519,14 +518,12 @@ class TestCreateNewDocumentVersion:
             organization=user.organization,
             created_by=user,
             storage_quota_mb=10,
-            storage_version=2,
         )
         room2 = Dataroom.objects.create(
             name="Room 2",
             organization=user.organization,
             created_by=user,
             storage_quota_mb=10,
-            storage_version=2,
         )
 
         root_folder = Folder.objects.create(
@@ -870,7 +867,6 @@ class TestPromoteDocumentVersion:
             organization=user.organization,
             created_by=user,
             storage_quota_mb=1,  # 1 MB quota limit
-            storage_version=2,
         )
 
         root_folder = Folder.objects.create(
@@ -947,14 +943,12 @@ class TestPromoteDocumentVersion:
             organization=user.organization,
             created_by=user,
             storage_quota_mb=10,
-            storage_version=2,
         )
         room2 = Dataroom.objects.create(
             name="Room 2",
             organization=user.organization,
             created_by=user,
             storage_quota_mb=10,
-            storage_version=2,
         )
 
         root_folder = Folder.objects.create(

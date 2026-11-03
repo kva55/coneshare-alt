@@ -4,7 +4,6 @@ from rest_framework import status
 
 from core.models import User, Organization
 from datarooms.models import Dataroom, DataroomCollaborator, DataroomFolder, DataroomDocument
-from datarooms.utils import get_dataroom_storage_folder_name
 from documents.models import Folder
 from sharelinks.models import QnAThread, ShareLink, ViewSession
 from sharelinks.views import _dispatch_automation_event

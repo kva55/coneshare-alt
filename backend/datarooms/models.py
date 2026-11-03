@@ -77,11 +77,6 @@ class Dataroom(BaseModel):
     brand_secondary_color = models.CharField(max_length=9, null=True, blank=True)
     brand_accent_color = models.CharField(max_length=9, null=True, blank=True)
     storage_quota_mb = models.IntegerField(default=0, help_text="Max storage capacity for this dataroom in MB. 0 means unlimited.")
-    storage_version = models.PositiveSmallIntegerField(
-        default=2,
-        db_index=True,
-        help_text="Storage architecture version: 1 (legacy user-scoped), 2 (system vault)"
-    )
     vault_folder = models.OneToOneField(
         'documents.Folder',
         on_delete=models.SET_NULL,

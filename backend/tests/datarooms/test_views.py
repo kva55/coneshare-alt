@@ -10,7 +10,6 @@ from rest_framework.exceptions import APIException
 
 from datarooms.models import Dataroom, DataroomDocument, DataroomFolder, DataroomItemOrder
 from datarooms.services import touch_dataroom_folder_ancestors, get_dataroom_storage_used_bytes
-from datarooms.utils import get_dataroom_storage_folder_name
 from documents.models import Document, Folder
 from documents.services import recalculate_user_document_size, is_dataroom_vault_document
 from sharelinks.models import DataroomVisit, ShareLink, ViewSession
@@ -253,8 +252,7 @@ class TestDataroomViewSet:
             name="Deal Dataroom",
             organization=organization,
             created_by=user,
-            storage_quota_mb=500,
-            storage_version=2
+            storage_quota_mb=500
         )
 
         file_size = 50 * 1024 * 1024  # 50 MB (exceeds user's 10 MB personal quota)
@@ -294,79 +292,6 @@ class TestDataroomViewSet:
         }, format='json')
         assert res_personal.status_code == status.HTTP_200_OK
 
-    @patch('documents.services.fileserver_client.generate_upload_url', return_value='http://fileserver/upload')
-    @patch('documents.services.fileserver_client.delete_file')
-    def test_legacy_v1_direct_upload_consumes_user_personal_quota(self, mock_fs_delete, mock_fs_upload, api_client, user, organization):
-        """
-        Legacy v1 verification:
-        Legacy v1 datarooms store direct uploads under personal storage ('Dataroom Uploads').
-        1. Direct upload request checks personal quota and blocks if exceeded.
-        2. Successful v1 upload increments user.total_document_size.
-        3. Recalculate includes legacy personal files.
-        4. Upgrading the dataroom to v2 moves files to '__datarooms__' vault and frees personal quota upon recalculation.
-        """
-        user.custom_file_size_quota_mb = 10
-        user.total_document_size = 0
-        user.save()
-
-        dataroom = Dataroom.objects.create(
-            name="Legacy Room",
-            organization=organization,
-            created_by=user,
-            storage_quota_mb=500,
-            storage_version=1
-        )
-
-        # 1. Attempt upload that exceeds personal quota (15 MB > 10 MB) -> must fail with 400
-        url_request = f'/api/v1/datarooms/{dataroom.id}/uploads/request/'
-        res_fail = api_client.post(url_request, {'file_name': 'too_big.pdf', 'file_size': 15 * 1024 * 1024}, format='json')
-        assert res_fail.status_code == status.HTTP_400_BAD_REQUEST
-        assert "exceed your storage quota" in res_fail.data['detail']
-
-        # 2. Upload a file at root and a file in a subfolder within personal quota
-        file_size = 2 * 1024 * 1024
-        res_ok = api_client.post(url_request, {'file_name': 'doc.pdf', 'file_size': file_size}, format='json')
-        assert res_ok.status_code == status.HTTP_200_OK
-
-        url_finalize = f'/api/v1/datarooms/{dataroom.id}/uploads/finalize/'
-        res_fin = api_client.post(url_finalize, {
-            'storage_key': f'{dataroom.organization.id}/uploads/doc.pdf',
-            'unique_name': res_ok.data.get('unique_name', 'doc.pdf'),
-            'file_size': file_size,
-            'content_type': 'application/pdf',
-        }, format='json')
-        assert res_fin.status_code == status.HTTP_202_ACCEPTED
-
-        # Upload a second file inside a subfolder
-        finance_folder = DataroomFolder.objects.create(dataroom=dataroom, name='Finance', created_by=user)
-        subfolder_file_size = 1 * 1024 * 1024
-        res_sub_req = api_client.post(url_request, {'file_name': 'sub_doc.pdf', 'file_size': subfolder_file_size, 'destination_folder_id': finance_folder.id}, format='json')
-        assert res_sub_req.status_code == status.HTTP_200_OK
-
-        res_sub_fin = api_client.post(url_finalize, {
-            'storage_key': f'{dataroom.organization.id}/uploads/sub_doc.pdf',
-            'unique_name': res_sub_req.data.get('unique_name', 'sub_doc.pdf'),
-            'file_size': subfolder_file_size,
-            'content_type': 'application/pdf',
-            'destination_folder_id': finance_folder.id
-        }, format='json')
-        assert res_sub_fin.status_code == status.HTTP_202_ACCEPTED
-
-        total_uploaded = file_size + subfolder_file_size
-        user.refresh_from_db()
-        assert user.total_document_size == total_uploaded
-        assert recalculate_user_document_size(user) == total_uploaded
-
-        # 3. Upgrade dataroom to v2 (moves backing documents including subfolders to __datarooms__ vault)
-        res_upgrade = api_client.post(f'/api/v1/datarooms/{dataroom.id}/upgrade-storage/')
-        assert res_upgrade.status_code == status.HTTP_200_OK
-        dataroom.refresh_from_db()
-        assert dataroom.storage_version == 2
-
-        # 4. Upgrading automatically recalculated and freed the uploader's personal quota
-        user.refresh_from_db()
-        assert user.total_document_size == 0
-        assert recalculate_user_document_size(user) == 0
 
     @patch('documents.services.fileserver_client.delete_file')
     def test_delete_dataroom_with_shared_direct_upload_preserves_shared_document(self, mock_fs_delete, api_client, dataroom, user, organization):
@@ -1455,40 +1380,6 @@ class TestDataroomViewSet:
             name='test_nested.pdf'
         ).exists()
 
-    def test_dataroom_rename_updates_library_folder(self, api_client, dataroom):
-        """
-        Test that renaming a legacy (v1) dataroom renames the library folder under Dataroom Uploads,
-        while a modern (v2) dataroom keeps the immutable system vault folder intact.
-        """
-        # Test legacy v1 rename
-        dataroom.storage_version = 1
-        dataroom.save(update_fields=['storage_version'])
-
-        url_finalize = f'/api/v1/datarooms/{dataroom.id}/uploads/finalize/'
-        data_finalize = {
-            'storage_key': f'{dataroom.organization.id}/uploads/temp.txt',
-            'unique_name': 'temp.txt',
-            'file_size': 12,
-            'content_type': 'text/plain',
-        }
-        res = api_client.post(url_finalize, data_finalize, format='json')
-        assert res.status_code == status.HTTP_202_ACCEPTED
-
-        from documents.models import Folder
-        org = dataroom.created_by.organization
-        root_folder = Folder.objects.get_root_for_org(org)
-        dataroom_uploads = Folder.objects.get(organization=org, parent=root_folder, name="Dataroom Uploads")
-        assert Folder.objects.filter(organization=org, parent=dataroom_uploads, name=get_dataroom_storage_folder_name(dataroom.name, dataroom)).exists()
-
-        # Update the dataroom name via PATCH
-        url_patch = f'/api/v1/datarooms/{dataroom.id}/'
-        old_name = dataroom.name
-        new_name = "Brand New Dataroom Name"
-        res_patch = api_client.patch(url_patch, {'name': new_name}, format='json')
-        assert res_patch.status_code == status.HTTP_200_OK
-
-        assert Folder.objects.filter(organization=org, parent=dataroom_uploads, name=get_dataroom_storage_folder_name(new_name, dataroom)).exists()
-        assert not Folder.objects.filter(organization=org, parent=dataroom_uploads, name=get_dataroom_storage_folder_name(old_name, dataroom)).exists()
 
     def test_dataroom_deletion_cleans_uploads(self, api_client, dataroom):
         """
@@ -1598,59 +1489,6 @@ class TestDataroomViewSet:
         assert response_remove.status_code == status.HTTP_204_NO_CONTENT
         assert not DataroomDocument.objects.filter(id=dataroom_doc.id).exists()
 
-    @patch('documents.services.fileserver_client.delete_file')
-    def test_direct_upload_deletion_with_multiple_dataroom_uploads_folders(self, mock_delete_file, api_client, dataroom, user2):
-        """
-        Test that direct upload deletion does not crash when multiple 'Dataroom Uploads' folders
-        exist (created by different users in the same organization).
-        """
-        # Ensure user2 is in the same organization as dataroom creator
-        org = dataroom.created_by.organization
-        user2.organization = org
-        user2.save()
-
-        # 1. Create two 'Dataroom Uploads' folders (one for each user)
-        root_folder = Folder.objects.get_root_for_org(org)
-        Folder.objects.create(
-            organization=org,
-            parent=root_folder,
-            name="Dataroom Uploads",
-            created_by=dataroom.created_by
-        )
-        Folder.objects.create(
-            organization=org,
-            parent=root_folder,
-            name="Dataroom Uploads",
-            created_by=user2
-        )
-
-        # Verify we now have 2 'Dataroom Uploads' folders in this org under root
-        assert Folder.objects.filter(organization=org, parent=root_folder, name="Dataroom Uploads").count() == 2
-
-        # 2. Finalize an upload for the dataroom (creates the first 'Dataroom Uploads' folder for dataroom.created_by)
-        url_finalize = f'/api/v1/datarooms/{dataroom.id}/uploads/finalize/'
-        data_finalize = {
-            'storage_key': f'{dataroom.organization.id}/uploads/test_file_multiple.pdf',
-            'unique_name': 'test_file_multiple.pdf',
-            'file_size': 1024,
-            'content_type': 'application/pdf',
-        }
-        res = api_client.post(url_finalize, data_finalize, format='json')
-        assert res.status_code == status.HTTP_202_ACCEPTED
-
-        dataroom_doc = DataroomDocument.objects.get(name='test_file_multiple.pdf', dataroom=dataroom)
-
-        # 3. Remove the document from the dataroom (triggers pre_delete signal)
-        url_remove = f'/api/v1/datarooms/{dataroom.id}/remove-content/'
-        data_remove = {
-            'dataroom_document_ids': [str(dataroom_doc.id)],
-            'dataroom_folder_ids': []
-        }
-        response_remove = api_client.post(url_remove, data_remove, format='json')
-
-        # This should succeed without raising MultipleObjectsReturned exception!
-        assert response_remove.status_code == status.HTTP_204_NO_CONTENT
-        assert not Document.objects.filter(name='test_file_multiple.pdf').exists()
 
     @patch('documents.services.fileserver_client.delete_file')
     def test_remove_content_cleans_backing_document_when_both_direct_and_linked_associations_exist(
@@ -2084,44 +1922,6 @@ class TestDataroomDocumentViewSet:
             organization=org, parent=system_vault, name=str(second_dataroom.id)
         ).exists()
 
-    def test_delete_dataroom_without_created_by_cleans_up_backing_folder(self, api_client, organization, user):
-        """
-        Test that delete_dataroom cleans up the backing folder even if dataroom.created_by is None.
-        """
-        from documents.models import Folder
-        from datarooms.models import Dataroom
-        from datarooms.services import delete_dataroom
-        from datarooms.utils import get_dataroom_storage_folder_name
-
-        root_folder = Folder.objects.get_root_for_org(organization)
-        user_uploads = Folder.objects.create(
-            organization=organization,
-            parent=root_folder,
-            name="Dataroom Uploads",
-            created_by=user,
-        )
-
-        dr = Dataroom.objects.create(
-            organization=organization,
-            name="No Creator Dataroom",
-            created_by=None,
-        )
-
-        storage_folder_name = get_dataroom_storage_folder_name(dr.name, dr)
-        dr_folder = Folder.objects.create(
-            organization=organization,
-            parent=user_uploads,
-            name=storage_folder_name,
-            created_by=user,
-        )
-
-        assert Folder.objects.filter(id=dr_folder.id).exists()
-
-        delete_dataroom(dr)
-
-        assert not Dataroom.objects.filter(id=dr.id).exists()
-        assert not Folder.objects.filter(id=dr_folder.id).exists()
-
 
 class TestDataroomFolderMtimeUpdates:
     def test_touch_dataroom_folder_ancestors_updates_tree(self, dataroom):
@@ -2320,15 +2120,14 @@ class TestDataroomFolderMtimeUpdates:
             })
             assert res.status_code == status.HTTP_200_OK
 
-    def test_dataroom_storage_version_defaults_and_vault_hierarchy(self, api_client, user, organization):
-        """Test newly created dataroom defaults to storage_version=2 and uses __datarooms__ vault."""
+    def test_dataroom_uses_system_vault_hierarchy(self, api_client, user, organization):
+        """Test newly created dataroom stores uploads under the __datarooms__ system vault."""
         api_client.force_authenticate(user=user)
         res = api_client.post('/api/v1/datarooms/', {'name': 'Modern Vault Dataroom'})
         assert res.status_code == status.HTTP_201_CREATED
-        assert res.data['storage_version'] == 2
+        assert 'storage_version' not in res.data
 
         dataroom = Dataroom.objects.get(id=res.data['id'])
-        assert dataroom.storage_version == 2
 
         # Finalize direct upload into v2 dataroom
         from datarooms.views import DataroomViewSet
@@ -2338,197 +2137,6 @@ class TestDataroomFolderMtimeUpdates:
         assert vault_folder.parent.parent.name == "__datarooms__"
         assert vault_folder.parent.created_by is None
 
-    def test_v1_dataroom_feature_gating_and_upgrade(self, api_client, user, user2, organization):
-        """Test that v1 dataroom gates collaboration/transfer and can be upgraded to v2."""
-        api_client.force_authenticate(user=user)
-        dataroom = Dataroom.objects.create(name="Legacy Dataroom", organization=organization, created_by=user, storage_version=1)
-
-        # 1. Attempt adding collaborator on v1 dataroom -> rejected
-        res = api_client.post(f'/api/v1/datarooms/{dataroom.id}/collaborators/', {'user_ids': [str(user2.id)]})
-        assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'legacy storage (v1)' in res.data['detail']
-
-        # 2. Attempt transfer ownership on v1 dataroom -> rejected
-        res = api_client.post(f'/api/v1/datarooms/{dataroom.id}/transfer-ownership/', {'new_owner_id': str(user2.id)})
-        assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'legacy storage (v1)' in res.data['detail']
-
-        # 3. Upgrade dataroom to v2
-        res = api_client.post(f'/api/v1/datarooms/{dataroom.id}/upgrade-storage/')
-        assert res.status_code == status.HTTP_200_OK
-        assert res.data['storage_version'] == 2
-
-        dataroom.refresh_from_db()
-        assert dataroom.storage_version == 2
-
-        # 4. Now adding collaborator on upgraded room succeeds
-        res = api_client.post(f'/api/v1/datarooms/{dataroom.id}/collaborators/', {'user_ids': [str(user2.id)]})
-        assert res.status_code == status.HTTP_201_CREATED
-
-    def test_v1_dataroom_upgrade_with_duplicate_document_names_in_legacy_folders(self, api_client, user, organization):
-        """Test that upgrading a v1 dataroom handles duplicate document and folder names across legacy backing roots without IntegrityError."""
-        api_client.force_authenticate(user=user)
-        dataroom = Dataroom.objects.create(name="Project Omega", organization=organization, created_by=user, storage_version=1)
-
-        root_folder = Folder.objects.get_root_for_org(organization)
-        from core.models import User
-        user2 = User.objects.create_user(
-            username="collab_legacy",
-            email="collab_legacy@example.com",
-            password="password123",
-            organization=organization,
-        )
-        # Create two legacy "Dataroom Uploads" roots (from different users' legacy paths)
-        legacy_uploads_1 = Folder.objects.create(
-            organization=organization,
-            parent=root_folder,
-            name="Dataroom Uploads",
-            created_by=user,
-            folder_type=Folder.FOLDER_TYPE_PERSONAL,
-        )
-        legacy_uploads_2 = Folder.objects.create(
-            organization=organization,
-            parent=root_folder,
-            name="Dataroom Uploads",
-            created_by=user2,
-            folder_type=Folder.FOLDER_TYPE_PERSONAL,
-        )
-
-        legacy_name = get_dataroom_storage_folder_name(dataroom.name, dataroom)
-        old_folder_1 = Folder.objects.create(
-            organization=organization,
-            parent=legacy_uploads_1,
-            name=legacy_name,
-            created_by=user,
-            folder_type=Folder.FOLDER_TYPE_PERSONAL,
-        )
-        old_folder_2 = Folder.objects.create(
-            organization=organization,
-            parent=legacy_uploads_2,
-            name=legacy_name,
-            created_by=user2,
-            folder_type=Folder.FOLDER_TYPE_PERSONAL,
-        )
-
-        # Create two documents with the exact same name created by the same user in different legacy folders
-        doc1 = Document.objects.create(
-            organization=organization,
-            folder=old_folder_1,
-            name="Confidential_Report.pdf",
-            type="document",
-            content_type="application/pdf",
-            status="ready",
-            created_by=user
-        )
-        doc2 = Document.objects.create(
-            organization=organization,
-            folder=old_folder_2,
-            name="Confidential_Report.pdf",
-            type="document",
-            content_type="application/pdf",
-            status="ready",
-            created_by=user
-        )
-
-        # Create two subfolders with the same name created by the same user in different legacy folders
-        subf1 = Folder.objects.create(
-            organization=organization,
-            parent=old_folder_1,
-            name="Financials",
-            created_by=user,
-            folder_type=Folder.FOLDER_TYPE_PERSONAL,
-        )
-        subf2 = Folder.objects.create(
-            organization=organization,
-            parent=old_folder_2,
-            name="Financials",
-            created_by=user2,
-            folder_type=Folder.FOLDER_TYPE_PERSONAL,
-        )
-
-        # Perform upgrade
-        res = api_client.post(f'/api/v1/datarooms/{dataroom.id}/upgrade-storage/')
-        assert res.status_code == status.HTTP_200_OK
-
-        dataroom.refresh_from_db()
-        assert dataroom.storage_version == 2
-
-        doc1.refresh_from_db()
-        doc2.refresh_from_db()
-        subf1.refresh_from_db()
-        subf2.refresh_from_db()
-
-        # Both documents should now be in the new vault folder with distinct names
-        assert doc1.folder_id == doc2.folder_id
-        assert doc1.name != doc2.name
-
-        # Both subfolders should now be in the new vault folder with distinct names
-        assert subf1.parent_id == subf2.parent_id
-
-    def test_v1_dataroom_upgrade_clears_created_by_on_subfolders_and_deducts_user_quota(self, api_client, user, organization):
-        """Test that upgrading a v1 dataroom clears created_by on subfolders and descendants to obey the vault invariant and deducts user quota."""
-        api_client.force_authenticate(user=user)
-        dataroom = Dataroom.objects.create(name="Project Beta", organization=organization, created_by=user, storage_version=1)
-
-        root_folder = Folder.objects.get_root_for_org(organization)
-        legacy_uploads = Folder.objects.create(organization=organization, parent=root_folder, name="Dataroom Uploads", created_by=user)
-        legacy_name = get_dataroom_storage_folder_name(dataroom.name, dataroom)
-        old_folder = Folder.objects.create(organization=organization, parent=legacy_uploads, name=legacy_name, created_by=user)
-
-        # Create child subfolder and nested subfolder in the legacy backing directory
-        subf = Folder.objects.create(organization=organization, parent=old_folder, name="Reports", created_by=user)
-        nested_subf = Folder.objects.create(organization=organization, parent=subf, name="2026", created_by=user)
-
-        # Direct doc under dataroom root
-        doc_root = Document.objects.create(
-            organization=organization, folder=old_folder, name="Root.pdf",
-            type="document", content_type="application/pdf", file_size=1000,
-            status="ready", created_by=user
-        )
-        # Doc in subfolder
-        doc_sub = Document.objects.create(
-            organization=organization, folder=subf, name="Sub.pdf",
-            type="document", content_type="application/pdf", file_size=2000,
-            status="ready", created_by=user
-        )
-        # Doc in nested subfolder
-        doc_nested = Document.objects.create(
-            organization=organization, folder=nested_subf, name="Nested.pdf",
-            type="document", content_type="application/pdf", file_size=2000,
-            status="ready", created_by=user
-        )
-        # Personal document outside dataroom
-        personal_folder = Folder.objects.create(organization=organization, parent=root_folder, name="My Private Docs", created_by=user)
-        personal_doc = Document.objects.create(
-            organization=organization, folder=personal_folder, name="Personal.pdf",
-            type="document", content_type="application/pdf", file_size=500,
-            status="ready", created_by=user
-        )
-
-        user.total_document_size = 5500
-        user.save(update_fields=['total_document_size'])
-
-        # Perform upgrade
-        res = api_client.post(f'/api/v1/datarooms/{dataroom.id}/upgrade-storage/')
-        assert res.status_code == status.HTTP_200_OK
-
-        dataroom.refresh_from_db()
-        assert dataroom.storage_version == 2
-
-        subf.refresh_from_db()
-        nested_subf.refresh_from_db()
-        assert subf.created_by is None
-        assert nested_subf.created_by is None
-
-        doc_root.refresh_from_db()
-        doc_sub.refresh_from_db()
-        doc_nested.refresh_from_db()
-        assert is_dataroom_vault_document(doc_root) is True
-        assert is_dataroom_vault_document(doc_sub) is True
-        assert is_dataroom_vault_document(doc_nested) is True
-
-        user.refresh_from_db()
-        assert user.total_document_size == 500
 
     def test_dataroom_stats(self, api_client, user, organization):
         """

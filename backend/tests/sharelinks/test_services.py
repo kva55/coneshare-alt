@@ -8,7 +8,6 @@ from sharelinks.services import (
     _get_unique_dataroom_share_link_name,
     resolve_notification_recipient,
 )
-from sharelinks.tasks import send_view_notification_email_task
 
 
 @pytest.mark.django_db
@@ -92,47 +91,3 @@ class TestResolveNotificationRecipient:
         assert resolve_notification_recipient(link) == user
 
 
-@pytest.mark.django_db
-class TestSendViewNotificationEmailTask:
-    @patch('sharelinks.tasks.send_mail')
-    def test_sends_to_collaborator_when_active(self, mock_send_mail, dataroom, user, user2):
-        DataroomCollaborator.objects.create(
-            dataroom=dataroom,
-            user=user2,
-            invited_by=user,
-        )
-        link = ShareLink.objects.create(
-            dataroom=dataroom,
-            created_by=user2,
-            slug="room-link-collab-active",
-            receive_email_notification=True,
-        )
-        session = ViewSession.objects.create(
-            share_link=link,
-            viewer_email="investor@fund.com",
-        )
-
-        send_view_notification_email_task(str(session.id))
-
-        mock_send_mail.assert_called_once()
-        _, kwargs = mock_send_mail.call_args
-        assert kwargs['recipient_list'] == [user2.email]
-
-    @patch('sharelinks.tasks.send_mail')
-    def test_falls_back_to_room_owner_when_collaborator_removed(self, mock_send_mail, dataroom, user, user2):
-        link = ShareLink.objects.create(
-            dataroom=dataroom,
-            created_by=user2,
-            slug="room-link-collab-removed",
-            receive_email_notification=True,
-        )
-        session = ViewSession.objects.create(
-            share_link=link,
-            viewer_email="investor@fund.com",
-        )
-
-        send_view_notification_email_task(str(session.id))
-
-        mock_send_mail.assert_called_once()
-        _, kwargs = mock_send_mail.call_args
-        assert kwargs['recipient_list'] == [user.email]

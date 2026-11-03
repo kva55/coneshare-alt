@@ -371,8 +371,7 @@ class TestAdminOrganizationView:
             name="Confidential Deal",
             organization=admin_user.organization,
             created_by=member,
-            storage_quota_mb=500,
-            storage_version=2
+            storage_quota_mb=500
         )
         vault_folder = get_or_create_dataroom_storage_folder(dataroom, member)
         Document.objects.create(

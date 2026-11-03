@@ -2180,7 +2180,6 @@ def test_version_upload_finalize_vault_document_quota_exceeded_returns_400(mock_
         organization=organization,
         created_by=user,
         storage_quota_mb=1,
-        storage_version=2,
     )
 
     root_folder = Folder.objects.create(name="__root__", organization=organization, created_by=None, parent=None, folder_type=Folder.FOLDER_TYPE_ROOT)

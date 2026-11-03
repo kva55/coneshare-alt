@@ -303,7 +303,7 @@ class DataroomSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'organization', 'created_at', 'updated_at', 'created_by',
             'owner', 'current_user_role', 'collaborator_count',
-            'storage_quota_mb', 'storage_used_bytes', 'storage_version',
+            'storage_quota_mb', 'storage_used_bytes',
             'show_file_index',
             'enable_qna',
             'branding_banner', 'brand_primary_color', 'brand_secondary_color', 'brand_accent_color',
@@ -313,7 +313,7 @@ class DataroomSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id', 'organization', 'created_at', 'updated_at', 'created_by',
             'owner', 'current_user_role', 'collaborator_count',
-            'storage_used_bytes', 'storage_version'
+            'storage_used_bytes',
         ]
 
     def create(self, validated_data):
@@ -492,7 +492,7 @@ class DataroomDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'organization', 'created_at', 'updated_at', 'created_by',
             'owner', 'current_user_role', 'collaborator_count', 'collaborators',
-            'storage_quota_mb', 'storage_used_bytes', 'storage_version',
+            'storage_quota_mb', 'storage_used_bytes',
             'show_file_index',
             'enable_qna',
             'branding_banner', 'banner_mode', 'banner_images',

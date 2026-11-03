@@ -7,7 +7,6 @@ from documents.services import is_dataroom_vault_document, recalculate_user_docu
 from datarooms.models import Dataroom
 from datarooms.services import (
     get_or_create_dataroom_storage_folder,
-    upgrade_dataroom_to_v2,
     delete_dataroom,
     sync_dataroom_folder_rename,
 )
@@ -181,7 +180,6 @@ class TestVaultStorageRefactor:
             name="Refactor Test Room",
             organization=org,
             created_by=user,
-            storage_version=2,
         )
         assert dataroom.vault_folder is None
 

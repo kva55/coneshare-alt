@@ -11,7 +11,6 @@ vi.mock('../../services/api', () => ({
   getAdminDatarooms: vi.fn(),
   updateAdminDataroom: vi.fn(),
   deleteAdminDataroom: vi.fn(),
-  upgradeAdminDataroomStorage: vi.fn(),
   transferAdminDataroomOwnership: vi.fn(),
   getAdminEligibleCollaborators: vi.fn(),
   getAdminDataroomCollaborators: vi.fn(),
@@ -47,7 +46,6 @@ const mockDatarooms = [
     name: 'Series A Due Diligence',
     created_at: '2026-08-01T10:00:00Z',
     updated_at: '2026-08-10T12:00:00Z',
-    storage_version: 2,
     storage_quota_mb: 1000,
     storage_used_bytes: 850 * 1024 * 1024, // 85% full (near capacity)
     collaborator_count: 2,
@@ -69,7 +67,6 @@ const mockDatarooms = [
     name: 'Legacy Deal Vault',
     created_at: '2026-07-15T08:00:00Z',
     updated_at: '2026-07-20T09:00:00Z',
-    storage_version: 1, // Legacy v1
     storage_quota_mb: 0, // Unlimited
     storage_used_bytes: 120 * 1024 * 1024,
     collaborator_count: 0,
@@ -108,8 +105,6 @@ describe('AdminDataroomsPage', () => {
       }
       if (params.status === 'near_capacity') {
         filtered = filtered.filter((d) => d.storage_quota_mb > 0 && d.storage_used_bytes / (d.storage_quota_mb * 1024 * 1024) >= 0.8);
-      } else if (params.status === 'legacy_v1') {
-        filtered = filtered.filter((d) => d.storage_version < 2);
       }
       if (params.ordering === 'name') {
         filtered.sort((a, b) => a.name.localeCompare(b.name));
@@ -204,13 +199,6 @@ describe('AdminDataroomsPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Series A Due Diligence')).toBeInTheDocument();
       expect(screen.queryByText('Legacy Deal Vault')).not.toBeInTheDocument();
-    });
-
-    // Filter by legacy v1
-    fireEvent.change(select, { target: { value: 'legacy_v1' } });
-    await waitFor(() => {
-      expect(screen.queryByText('Series A Due Diligence')).not.toBeInTheDocument();
-      expect(screen.getByText('Legacy Deal Vault')).toBeInTheDocument();
     });
   });
 
@@ -360,41 +348,6 @@ describe('AdminDataroomsPage', () => {
 
     expect(toast.error).toHaveBeenCalledWith('Please enter a valid positive number or 0 for unlimited.');
     expect(api.updateAdminDataroom).not.toHaveBeenCalled();
-  });
-
-  it('triggers storage upgrade for legacy v1 rooms', async () => {
-    const user = userEvent.setup();
-    api.upgradeAdminDataroomStorage.mockResolvedValue({
-      data: { ...mockDatarooms[1], storage_version: 2 },
-    });
-
-    render(
-      <MemoryRouter>
-        <AdminDataroomsPage />
-      </MemoryRouter>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Legacy Deal Vault')).toBeInTheDocument();
-    });
-
-    // Open actions menu for second row (Legacy v1)
-    const actionButtons = screen.getAllByRole('button', { name: /actions/i });
-    await user.click(actionButtons[1]);
-
-    const upgradeOption = await screen.findByText('Upgrade to Org-Scoped Storage');
-    await user.click(upgradeOption);
-
-    // Confirmation dialog appears
-    expect(screen.getByText('Upgrade to Organization-Scoped Storage?')).toBeInTheDocument();
-
-    const confirmBtn = screen.getByRole('button', { name: 'Upgrade Now' });
-    await user.click(confirmBtn);
-
-    await waitFor(() => {
-      expect(api.upgradeAdminDataroomStorage).toHaveBeenCalledWith('droom-2');
-      expect(toast.success).toHaveBeenCalledWith('Dataroom upgraded to organization-scoped storage.');
-    });
   });
 
   it('deletes dataroom via confirmation dialog', async () => {

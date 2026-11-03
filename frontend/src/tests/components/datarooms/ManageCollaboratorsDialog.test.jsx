@@ -203,28 +203,4 @@ describe('ManageCollaboratorsDialog', () => {
     });
   });
 
-  it('renders legacy storage warning with Go to Settings button for v1 dataroom', async () => {
-    const user = userEvent.setup();
-    const mockOpenChange = vi.fn();
-    const legacyDataroom = { ...mockDataroom, storage_version: 1 };
-
-    render(
-      <ManageCollaboratorsDialog
-        isOpen={true}
-        onOpenChange={mockOpenChange}
-        dataroom={legacyDataroom}
-        onCollaboratorsUpdated={vi.fn()}
-      />
-    );
-
-    expect(await screen.findByText(/Legacy.*Storage.*\(v1\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/Settings tab/i)).toBeInTheDocument();
-
-    const goToSettingsBtn = screen.getByRole('button', { name: /Go to Settings/i });
-    expect(goToSettingsBtn).toBeInTheDocument();
-
-    await user.click(goToSettingsBtn);
-    expect(mockOpenChange).toHaveBeenCalledWith(false);
-    expect(mockedNavigate).toHaveBeenCalledWith('/datarooms/dr_123?tab=settings');
-  });
 });

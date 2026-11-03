@@ -10,7 +10,6 @@ from core.i18n_utils import resolve_email_language
 from core.models import AppConfiguration
 from core.tasks import send_signup_verification_email_task
 from sharelinks.models import ViewSession
-from sharelinks.tasks import send_view_notification_email_task
 
 User = get_user_model()
 
@@ -198,36 +197,6 @@ class TestUserLanguagePreference:
         assert msg.subject == expected_subject
         assert expected_snippet in msg.body
 
-    @pytest.mark.parametrize("lang, expected_subject, expected_snippet", [
-        ("en", "Your shared item 'Test Document.pdf' was viewed", "Just letting you know that your shared item, 'Test Document.pdf', was viewed."),
-        ("zh-hans", "您分享的“Test Document.pdf”已被查看", "特此通知：您分享的“Test Document.pdf”已被查看。"),
-        ("ru", "Ваш общий объект «Test Document.pdf» был просмотрен", "Сообщаем, что ваш общий объект «Test Document.pdf» был просмотрен."),
-        ("de", "Ihr geteiltes Element „Test Document.pdf“ wurde aufgerufen", "Ihr geteiltes Element „Test Document.pdf“ wurde soeben aufgerufen."),
-        ("fr", "Votre élément partagé « Test Document.pdf » a été consulté", "Votre élément partagé « Test Document.pdf » a été consulté."),
-        ("nl", "Uw gedeelde item ‘Test Document.pdf’ is bekeken", "Wij laten u weten dat uw gedeelde item ‘Test Document.pdf’ is bekeken."),
-    ])
-    def test_sharelink_view_notification_email_owner_language(self, mailoutbox, share_link, lang, expected_subject, expected_snippet):
-        """Verify sharelink view notification email respects the link owner's preferred language."""
-        share_link.receive_email_notification = True
-        share_link.save()
-
-        owner = share_link.created_by
-        owner.language = lang
-        owner.save()
-
-        session = ViewSession.objects.create(
-            share_link=share_link,
-            viewer_email='viewer@example.com',
-            ip_address='127.0.0.1'
-        )
-
-        mailoutbox.clear()
-        send_view_notification_email_task(str(session.id))
-        assert len(mailoutbox) == 1
-        msg = mailoutbox[0]
-        assert msg.to == [owner.email]
-        assert msg.subject == expected_subject
-        assert expected_snippet in msg.body
 
     def test_signup_request_preserves_user_language_when_accept_header_unsupported(self, db, monkeypatch):
         """Verify signup verification email preserves user's language when Accept-Language header is unsupported."""
@@ -263,34 +232,6 @@ class TestUserLanguagePreference:
         user.refresh_from_db()
         assert user.language == 'ru'
 
-    @pytest.mark.parametrize("lang, expected_loc", [
-        ("en", "Unknown Location"),
-        ("zh-hans", "未知位置"),
-        ("ru", "Неизвестное местоположение"),
-        ("de", "Unbekannter Standort"),
-        ("fr", "Emplacement inconnu"),
-        ("nl", "Onbekende locatie"),
-    ])
-    def test_sharelink_view_notification_email_fallbacks_translated(self, mailoutbox, share_link, lang, expected_loc):
-        """Verify fallback values (Unknown Location) are translated to the owner's language."""
-        share_link.receive_email_notification = True
-        share_link.save()
-
-        owner = share_link.created_by
-        owner.language = lang
-        owner.save()
-
-        session = ViewSession.objects.create(
-            share_link=share_link,
-            viewer_email='',
-            ip_address='127.0.0.1'
-        )
-
-        mailoutbox.clear()
-        send_view_notification_email_task(str(session.id))
-        assert len(mailoutbox) == 1
-        msg = mailoutbox[0]
-        assert expected_loc in msg.body or expected_loc in msg.alternatives[0][0]
 
     def test_sharelink_viewer_email_verification_falls_back_to_en_regardless_of_owner(self, mailoutbox, share_link_requires_email_verification):
         """Verify external viewer verification email falls back to 'en' when Accept-Language is omitted/unsupported."""

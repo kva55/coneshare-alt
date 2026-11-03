@@ -19,8 +19,6 @@ from documents.models import Document, Folder
 from core.pagination import StandardResultsSetPagination
 from documents.services import (
     delete_folder_and_contents,
-    check_user_quota_on_upload,
-    QuotaExceededError,
     generate_storage_key,
     create_document_from_upload,
     validate_storage_key,
@@ -43,14 +41,11 @@ from .services import (
     remove_dataroom_content,
     touch_dataroom_folder_ancestors,
     get_or_create_dataroom_storage_folder,
-    upgrade_dataroom_to_v2,
-    sync_dataroom_rename,
     sync_dataroom_folder_rename,
     sync_dataroom_document_rename,
     get_dataroom_storage_used_bytes,
 )
 from .utils import (
-    get_dataroom_storage_folder_name,
     build_ordered_dataroom_items,
     is_dataroom_owner_or_admin,
     is_dataroom_collaborator_or_above,
@@ -134,9 +129,7 @@ class DataroomViewSet(viewsets.ModelViewSet):
         delete_dataroom(instance)
 
     def perform_update(self, serializer):
-        old_name = self.get_object().name
-        instance = serializer.save()
-        sync_dataroom_rename(instance, old_name)
+        serializer.save()
 
     def _scope_has_item_order_rows(self, dataroom, parent_folder):
         return DataroomItemOrder.objects.filter(dataroom=dataroom, parent_folder=parent_folder).exists()
@@ -656,14 +649,6 @@ class DataroomViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # For legacy v1 datarooms whose backing storage resides in personal storage ('Dataroom Uploads'),
-        # enforce user personal storage quota. Modern v2 system vaults bypass user quota.
-        if dataroom.storage_version < 2:
-            try:
-                check_user_quota_on_upload(request.user, validated_data['file_size'])
-            except QuotaExceededError as e:
-                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
         file_name = validated_data['file_name']
         relative_path = validated_data.get('path')
         destination_folder = validated_data.get('destination_folder_id')
@@ -799,9 +784,9 @@ class DataroomViewSet(viewsets.ModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
-                # Modern v2 system vaults (__datarooms__) do not track user personal quota.
-                # Legacy v1 uploads reside in personal storage ('Dataroom Uploads') and track user quota.
-                track_user_quota = (locked_dataroom.storage_version < 2)
+                # Dataroom uploads live in the system vault (__datarooms__) and count
+                # against the dataroom quota, not the uploading user's personal quota.
+                track_user_quota = False
                 document = create_document_from_upload(
                     requesting_user=request.user,
                     folder=library_folder,
@@ -868,12 +853,6 @@ class DataroomViewSet(viewsets.ModelViewSet):
         # POST: Add collaborator(s)
         if not is_dataroom_owner_or_admin(request.user, dataroom):
             raise PermissionDenied("Only the dataroom owner or an organization admin can add collaborators.")
-
-        if dataroom.storage_version < 2:
-            return Response(
-                {"detail": "This dataroom uses legacy storage (v1). Please upgrade to modern storage to invite collaborators."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
         serializer = DataroomAddCollaboratorSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -990,12 +969,6 @@ class DataroomViewSet(viewsets.ModelViewSet):
         if not is_dataroom_owner_or_admin(request.user, dataroom):
             raise PermissionDenied("Only the dataroom owner or an organization admin can transfer ownership.")
 
-        if dataroom.storage_version < 2:
-            return Response(
-                {"detail": "This dataroom uses legacy storage (v1). Please upgrade to modern storage before transferring ownership."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         serializer = DataroomTransferOwnershipSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -1042,28 +1015,6 @@ class DataroomViewSet(viewsets.ModelViewSet):
             "dataroom": detail_serializer.data
         }, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], url_path='upgrade-storage')
-    def upgrade_storage(self, request, pk=None):
-        dataroom = self.get_object()
-        if not is_dataroom_owner_or_admin(request.user, dataroom):
-            raise PermissionDenied("Only the dataroom owner or an organization admin can upgrade this dataroom.")
-
-        if dataroom.storage_version >= 2:
-            return Response(
-                {"detail": "Dataroom is already using modern storage architecture."},
-                status=status.HTTP_200_OK
-            )
-
-        success = upgrade_dataroom_to_v2(dataroom)
-        if not success:
-            return Response(
-                {"detail": "Failed to upgrade dataroom storage architecture."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        dataroom.refresh_from_db()
-        detail_serializer = DataroomDetailSerializer(dataroom, context=self.get_serializer_context())
-        return Response(detail_serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='eligible-collaborators')
     def eligible_collaborators(self, request, pk=None):

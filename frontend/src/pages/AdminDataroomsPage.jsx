@@ -11,8 +11,6 @@ import {
   Trash2,
   MoreVertical,
   ExternalLink,
-  Layers,
-  AlertTriangle,
   Sliders,
   Link2,
   ArrowUpDown,
@@ -41,7 +39,6 @@ import { cn } from '../lib/utils';
 import {
   getAdminDatarooms,
   deleteAdminDataroom,
-  upgradeAdminDataroomStorage,
 } from '../services/api';
 
 export function AdminDataroomsPage() {
@@ -71,8 +68,6 @@ export function AdminDataroomsPage() {
   const [dataroomForTransfer, setDataroomForTransfer] = useState(null);
   const [dataroomForCollaborators, setDataroomForCollaborators] = useState(null);
   const [dataroomToDelete, setDataroomToDelete] = useState(null);
-  const [dataroomToUpgrade, setDataroomToUpgrade] = useState(null);
-  const [isUpgrading, setIsUpgrading] = useState(false);
 
   // Debounce search input
   useEffect(() => {
@@ -167,21 +162,6 @@ export function AdminDataroomsPage() {
       await fetchDatarooms();
     } catch (err) {
       // Handled by api interceptor
-    }
-  };
-
-  const handleUpgradeStorage = async () => {
-    if (!dataroomToUpgrade) return;
-    setIsUpgrading(true);
-    try {
-      await upgradeAdminDataroomStorage(dataroomToUpgrade.id);
-      toast.success(t('admin.upgradeDataroomSuccess'));
-      setDataroomToUpgrade(null);
-      await fetchDatarooms();
-    } catch (err) {
-      // Handled by api interceptor
-    } finally {
-      setIsUpgrading(false);
     }
   };
 
@@ -307,7 +287,6 @@ export function AdminDataroomsPage() {
               <option value="all">{t('admin.filterAllDatarooms')}</option>
               <option value="near_capacity">{t('admin.filterNearCapacity')}</option>
               <option value="unlimited">{t('admin.filterUnlimited')}</option>
-              <option value="legacy_v1">{t('admin.filterLegacyV1')}</option>
             </Select>
           </div>
         </div>
@@ -370,7 +349,6 @@ export function AdminDataroomsPage() {
                     const usedBytes = dataroom.storage_used_bytes || 0;
                     const quotaBytes = quotaMb * 1024 * 1024;
                     const usagePercentage = quotaBytes > 0 ? Math.min((usedBytes / quotaBytes) * 100, 100) : 0;
-                    const isLegacyV1 = (dataroom.storage_version ?? 2) < 2;
 
                     let indicatorColor = 'bg-emerald-500';
                     if (usagePercentage > 90) {
@@ -381,7 +359,7 @@ export function AdminDataroomsPage() {
 
                     return (
                       <tr key={dataroom.id} className="hover:bg-muted/30 transition-colors border-b">
-                        {/* Name + Storage Version Badge */}
+                        {/* Name */}
                         <td className="p-4 min-w-[220px] max-w-[280px]">
                           <div className="flex items-start gap-3">
                             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary mt-0.5">
@@ -398,14 +376,6 @@ export function AdminDataroomsPage() {
                                 <span className="truncate">{dataroom.name}</span>
                                 <ExternalLink className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground" />
                               </Link>
-                              {isLegacyV1 && (
-                                <div className="flex items-center gap-1.5">
-                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/40 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                                    <AlertTriangle className="h-2.5 w-2.5 mr-1 text-amber-600" />
-                                    {t('admin.v1Legacy')}
-                                  </Badge>
-                                </div>
-                              )}
                             </div>
                           </div>
                         </td>
@@ -545,16 +515,6 @@ export function AdminDataroomsPage() {
                                 <span>{t('datarooms.manageCollaborators')}</span>
                               </DropdownMenu.Item>
 
-                              {isLegacyV1 && (
-                                <DropdownMenu.Item
-                                  onClick={() => setDataroomToUpgrade(dataroom)}
-                                  className="flex w-full cursor-pointer items-center gap-x-2 px-4 py-2 text-left text-sm text-emerald-600 hover:bg-emerald-50 focus:bg-emerald-50 focus:outline-none dark:text-emerald-400 hover:dark:bg-emerald-950/40"
-                                >
-                                  <Layers className="h-4 w-4 text-emerald-600" />
-                                  <span>{t('admin.upgradeToVault')}</span>
-                                </DropdownMenu.Item>
-                              )}
-
                               <DropdownMenu.Separator className="my-1 h-px bg-gray-200 dark:bg-gray-700" />
 
                               <DropdownMenu.Item
@@ -616,18 +576,6 @@ export function AdminDataroomsPage() {
           dataroom={dataroomForCollaborators}
           onCollaboratorsUpdated={fetchDatarooms}
           isAdmin={true}
-        />
-
-        <ConfirmationDialog
-          isOpen={!!dataroomToUpgrade}
-          onOpenChange={() => setDataroomToUpgrade(null)}
-          title={t('admin.upgradeVaultConfirmTitle', {
-            name: dataroomToUpgrade?.name,
-          })}
-          description={t('admin.upgradeVaultConfirmDesc')}
-          onConfirm={handleUpgradeStorage}
-          confirmText={t('admin.upgradeNow')}
-          isLoading={isUpgrading}
         />
 
         <ConfirmationDialog

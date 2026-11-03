@@ -38,8 +38,6 @@ from .serializers import (
 )
 from .services import (
     delete_dataroom,
-    sync_dataroom_rename,
-    upgrade_dataroom_to_v2,
 )
 
 logger = logging.getLogger(__name__)
@@ -154,9 +152,7 @@ class AdminDataroomViewSet(viewsets.ModelViewSet):
 
         # Status filter
         status_param = self.request.query_params.get('status', '').strip()
-        if status_param == 'legacy_v1':
-            qs = qs.filter(storage_version__lt=2)
-        elif status_param == 'unlimited':
+        if status_param == 'unlimited':
             qs = qs.filter(storage_quota_mb=0)
         elif status_param == 'near_capacity':
             qs = qs.filter(
@@ -190,19 +186,11 @@ class AdminDataroomViewSet(viewsets.ModelViewSet):
         delete_dataroom(instance)
 
     def perform_update(self, serializer):
-        old_name = self.get_object().name
-        instance = serializer.save()
-        sync_dataroom_rename(instance, old_name)
+        serializer.save()
 
     @action(detail=True, methods=['post'], url_path='transfer-ownership')
     def transfer_ownership(self, request, pk=None):
         dataroom = self.get_object()
-
-        if dataroom.storage_version < 2:
-            return Response(
-                {"detail": "This dataroom uses legacy storage (v1). Please upgrade to modern storage before transferring ownership."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         serializer = DataroomTransferOwnershipSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -250,26 +238,6 @@ class AdminDataroomViewSet(viewsets.ModelViewSet):
             "dataroom": detail_serializer.data,
         }, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], url_path='upgrade-storage')
-    def upgrade_storage(self, request, pk=None):
-        dataroom = self.get_object()
-
-        if dataroom.storage_version >= 2:
-            return Response(
-                {"detail": "Dataroom is already using modern storage architecture."},
-                status=status.HTTP_200_OK,
-            )
-
-        success = upgrade_dataroom_to_v2(dataroom)
-        if not success:
-            return Response(
-                {"detail": "Failed to upgrade dataroom storage architecture."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        dataroom.refresh_from_db()
-        detail_serializer = DataroomDetailSerializer(dataroom, context=self.get_serializer_context())
-        return Response(detail_serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get', 'post'], url_path='collaborators')
     def collaborators(self, request, pk=None):
@@ -286,12 +254,6 @@ class AdminDataroomViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_200_OK)
 
         # POST: Add collaborator(s)
-        if dataroom.storage_version < 2:
-            return Response(
-                {"detail": "This dataroom uses legacy storage (v1). Please upgrade to modern storage to invite collaborators."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         serializer = DataroomAddCollaboratorSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 

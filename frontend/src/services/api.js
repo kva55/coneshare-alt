@@ -656,7 +656,6 @@ export const deleteDataroomBannerImage = (dataroomId, bannerId) =>
 export const reorderDataroomBannerImages = (dataroomId, items) =>
   api.post(`/datarooms/${dataroomId}/banner-images/reorder/`, items);
 export const deleteDataroom = (id) => api.delete(`/datarooms/${id}/`);
-export const upgradeDataroomStorage = (id) => api.post(`/datarooms/${id}/upgrade-storage/`);
 export const addContentToDataroom = (id, data) => api.post(`/datarooms/${id}/add-content/`, data);
 export const removeContentFromDataroom = (id, data) => api.post(`/datarooms/${id}/remove-content/`, data);
 export const moveDataroomContent = (id, data) => api.post(`/datarooms/${id}/move-content/`, data);
@@ -762,8 +761,6 @@ export const updateAdminDataroom = (id, data) => api.patch(`/admin/datarooms/${i
 export const deleteAdminDataroom = (id) => api.delete(`/admin/datarooms/${id}/`);
 export const transferAdminDataroomOwnership = (id, newOwnerId) =>
   api.post(`/admin/datarooms/${id}/transfer-ownership/`, { new_owner_id: newOwnerId });
-export const upgradeAdminDataroomStorage = (id) =>
-  api.post(`/admin/datarooms/${id}/upgrade-storage/`);
 export const getAdminDataroomCollaborators = (id) =>
   api.get(`/admin/datarooms/${id}/collaborators/`);
 export const addAdminDataroomCollaborators = (id, data) =>

@@ -1037,7 +1037,6 @@ describe('DataroomPage', () => {
                 data: {
                     ...mockDataroomRoot,
                     created_by: 'u1',
-                    storage_version: 2,
                     storage_quota_mb: 500,
                     storage_used_bytes: 104857600,
                 }
@@ -1065,47 +1064,6 @@ describe('DataroomPage', () => {
             expect(saveButton).toBeDisabled();
         });
 
-        it('shows legacy storage upgrade banner for v1 dataroom and handles upgrade', async () => {
-            const user = userEvent.setup();
-            api.getDataroom.mockResolvedValue({
-                data: {
-                    ...mockDataroomRoot,
-                    created_by: 'u1',
-                    storage_version: 1,
-                }
-            });
-            api.upgradeDataroomStorage.mockResolvedValue({
-                data: {
-                    ...mockDataroomRoot,
-                    created_by: 'u1',
-                    storage_version: 2,
-                }
-            });
-
-            renderComponent();
-            expect(await screen.findByRole('heading', { name: 'Test Dataroom' })).toBeInTheDocument();
-
-            // Switch to Settings tab
-            const settingsTab = screen.getByRole('tab', { name: 'Settings' });
-            await user.click(settingsTab);
-
-            // Check legacy storage upgrade banner is displayed
-            expect(await screen.findByText('Legacy User-Scoped Storage (v1)')).toBeInTheDocument();
-            const upgradeButton = screen.getByRole('button', { name: 'Upgrade to Org-Scoped Storage' });
-            expect(upgradeButton).toBeInTheDocument();
-
-            await user.click(upgradeButton);
-
-            // Confirm in dialog
-            expect(await screen.findByText('Upgrade Storage Architecture?')).toBeInTheDocument();
-            const dialog = screen.getByRole('dialog');
-            const confirmBtn = within(dialog).getByRole('button', { name: 'Upgrade to Org-Scoped Storage' });
-            await user.click(confirmBtn);
-
-            await waitFor(() => {
-                expect(api.upgradeDataroomStorage).toHaveBeenCalledWith('dr123');
-            });
-        });
     });
 
     describe('Branding and Banners Settings', () => {
@@ -1115,7 +1073,6 @@ describe('DataroomPage', () => {
                 data: {
                     ...mockDataroomRoot,
                     created_by: 'u1',
-                    storage_version: 2,
                     logo_mode: 'org',
                     banner_mode: 'single',
                 }
@@ -1159,7 +1116,6 @@ describe('DataroomPage', () => {
                 data: {
                     ...mockDataroomRoot,
                     created_by: 'u1',
-                    storage_version: 2,
                     banner_mode: 'gallery',
                     banner_images: [
                         { id: 'b1', image: 'https://example.com/slide1.jpg', caption: 'Internal Gallery Slide 1', position: 0 },
@@ -1185,7 +1141,6 @@ describe('DataroomPage', () => {
                 data: {
                     ...mockDataroomRoot,
                     created_by: 'u1',
-                    storage_version: 2,
                     banner_mode: 'gallery',
                     banner_images: [
                         { id: 'b1', image: 'https://example.com/slide1.jpg', caption: 'Only Slide', position: 0 },
