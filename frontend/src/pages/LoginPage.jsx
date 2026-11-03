@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router'
-import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { authService } from '../services/authService'
 import { APP_DISPLAY_VERSION } from '../lib/constants'
@@ -17,25 +16,6 @@ function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [showSignupLink, setShowSignupLink] = useState(false)
-
-  useEffect(() => {
-    let mounted = true
-
-    const loadPublicSettings = async () => {
-      try {
-        const data = await authService.getPublicSettings()
-        if (mounted) setShowSignupLink(Boolean(data?.enable_public_signup))
-      } catch (_err) {
-        if (mounted) setShowSignupLink(false)
-      }
-    }
-
-    loadPublicSettings()
-    return () => {
-      mounted = false
-    }
-  }, [])
 
   useEffect(() => {
     document.title = `${t('auth.signIn')} - ${brandName}`;
@@ -135,14 +115,6 @@ function LoginPage() {
             </Button>
           </div>
         </form>
-        {showSignupLink && (
-          <p className="text-center text-sm text-gray-600 dark:text-gray-400">
-            {t('auth.newTo', { brandName })}{' '}
-            <Link className="font-medium text-indigo-600 hover:text-indigo-500" to="/signup">
-              {t('auth.signUp')}
-            </Link>
-          </p>
-        )}
 
       </div>
 

@@ -9,10 +9,9 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from geoip2.errors import AddressNotFoundError
 from rest_framework import serializers
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from drf_spectacular.utils import extend_schema_field
 
-from core.models import APIKey, AppConfiguration, LoginActivity, Organization, UserGroup
+from core.models import AppConfiguration, LoginActivity, Organization, UserGroup
 from core.services import blacklist_all_user_tokens, get_dynamic_setting
 
 logger = logging.getLogger(__name__)
@@ -309,37 +308,6 @@ class AdminResetPasswordSerializer(serializers.Serializer):
         return user
 
 
-class SignupRequestSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
-    name = serializers.CharField(required=False, allow_blank=True, max_length=255)
-
-    def validate_email(self, value):
-        return value.strip().lower()
-
-    def validate_password(self, value):
-        try:
-            password_validation.validate_password(value)
-        except ValidationError as e:
-            raise serializers.ValidationError(list(e.messages))
-        return value
-
-
-class SignupVerifySerializer(serializers.Serializer):
-    uid = serializers.CharField()
-    token = serializers.CharField()
-
-
-class SignupRequestAcceptedSerializer(serializers.Serializer):
-    detail = serializers.CharField()
-
-
-class SignupVerifyResponseSerializer(serializers.Serializer):
-    user = UserSerializer()
-    access = serializers.CharField()
-    refresh = serializers.CharField()
-
-
 class LoginActivitySerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     user_name = serializers.CharField(source='user.name', read_only=True)
@@ -377,20 +345,3 @@ class AppConfigurationSerializer(serializers.ModelSerializer):
         model = AppConfiguration
         fields = ['key', 'value', 'description']
         read_only_fields = ['key', 'description']
-
-
-class APIKeySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = APIKey
-        fields = ['id', 'name', 'prefix', 'tier', 'created_at', 'expires_at', 'last_used_at']
-        read_only_fields = ['id', 'prefix', 'created_at', 'last_used_at']
-
-
-class APIKeyCreateSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=100)
-    tier = serializers.ChoiceField(
-        choices=[('read_only', 'Read Only'), ('read_write', 'Read & Write'), ('full_access', 'Full Access')],
-        default='read_only'
-    )
-    expires_in_days = serializers.IntegerField(required=False, allow_null=True, min_value=1)
-

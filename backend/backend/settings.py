@@ -205,15 +205,11 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        # APIKeyAuthentication must precede JWTAuthentication so cs_live_... keys
-        # are evaluated directly without SimpleJWT raising an InvalidToken exception on them.
-        'core.authentication.APIKeyAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
-        'core.permissions.APIKeyTierPermission',
     ],
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
@@ -224,7 +220,6 @@ REST_FRAMEWORK = {
         'anon': '1000/day',
         'user': '200/min',
         'password_verify': '5/min',
-        'signup': '5/min',
         'health_check': '1000/min',
         'document_copy': '5/min',
     }
@@ -429,9 +424,6 @@ FILE_SIZE_QUOTA_MB = 0
 
 # Maximum number of files that can be uploaded in a single upload operation.
 MAX_FILES_PER_UPLOAD = 100
-
-# Public signup toggle.
-ENABLE_PUBLIC_SIGNUP = False
 
 # Whether to flatten watermarked PDFs on download.
 FLATTEN_WATERMARKED_DOWNLOADS = False

@@ -4,21 +4,12 @@ from urllib.parse import urljoin
 
 from django.contrib.auth import get_user_model, logout
 from django.contrib.auth.signals import user_logged_in
-from django.core.exceptions import ValidationError
-from django.utils.encoding import force_str
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.conf import settings
 from django.core.cache import cache
 from django.db import connections
-from django.db import transaction
-from django.db import IntegrityError
 from django.db.utils import DatabaseError
-from django.utils.encoding import force_bytes
 from django.utils.translation import gettext as _
-from django.utils import timezone
-from datetime import timedelta
-from rest_framework import exceptions, mixins, permissions, serializers, status, viewsets
-from rest_framework.decorators import action
+from rest_framework import mixins, permissions, serializers, status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -26,21 +17,18 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from core.models import APIKey, Organization, UserGroup
-from core.authentication import generate_raw_api_key
-from core.i18n_utils import resolve_email_language
-from core.permissions import APIKeyTierPermission, IsAdmin
-from core.services import blacklist_all_user_tokens, get_dynamic_setting
-from core.serializers import (APIKeySerializer, APIKeyCreateSerializer, ChangePasswordSerializer, OrganizationSerializer,
-                              SignupRequestAcceptedSerializer,
-                              SignupRequestSerializer, SignupVerifyResponseSerializer,
-                              SignupVerifySerializer, UserGroupSerializer, UserSerializer)
-from core.tasks import send_signup_verification_email_task
-from core.tokens import signup_activation_token_generator
+from core.models import Organization, UserGroup
+from core.permissions import IsAdmin
+from core.services import blacklist_all_user_tokens
+from core.serializers import (
+    ChangePasswordSerializer,
+    OrganizationSerializer,
+    UserGroupSerializer,
+    UserSerializer,
+)
 
 User = get_user_model()
 
@@ -63,7 +51,7 @@ class OrganizationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     queryset = Organization.objects.all()
     serializer_class = OrganizationSerializer
-    permission_classes = [IsAuthenticated, APIKeyTierPermission]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
@@ -82,7 +70,7 @@ class UserViewSet(mixins.RetrieveModelMixin,
     """
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated, APIKeyTierPermission, IsSelf]
+    permission_classes = [IsAuthenticated, IsSelf]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
@@ -100,7 +88,7 @@ class UserGroupViewSet(viewsets.ModelViewSet):
     """
     queryset = UserGroup.objects.all()
     serializer_class = UserGroupSerializer
-    permission_classes = [IsAuthenticated, IsAdmin, APIKeyTierPermission]
+    permission_classes = [IsAuthenticated, IsAdmin]
 
     def get_queryset(self):
         user = self.request.user
@@ -146,138 +134,15 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 
 @extend_schema(tags=['core'])
-class SignupRequestView(APIView):
-    permission_classes = [permissions.AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = 'signup'
-
-    @extend_schema(
-        request=SignupRequestSerializer,
-        responses={202: SignupRequestAcceptedSerializer, 400: dict, 403: dict},
-    )
-    def post(self, request):
-        if not get_dynamic_setting('ENABLE_PUBLIC_SIGNUP'):
-            return Response({"detail": _("Public signup is disabled.")}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = SignupRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        email = serializer.validated_data['email']
-
-        # Always return an accepted response to avoid account enumeration.
-        accepted_response = Response(
-            {"detail": _("If this email is valid, a verification email has been sent.")},
-            status=status.HTTP_202_ACCEPTED
-        )
-
-        accept_header = request.META.get('HTTP_ACCEPT_LANGUAGE', '')
-
-        try:
-            with transaction.atomic():
-                user = User.objects.select_for_update().filter(email=email).first()
-                user_lang = getattr(user, 'language', None) if user else None
-                target_lang = resolve_email_language(
-                    accept_header=accept_header,
-                    user_lang=user_lang,
-                    request_lang=getattr(request, 'LANGUAGE_CODE', None),
-                    default_lang='en',
-                )
-
-                if not user:
-                    organization = Organization.objects.first()
-                    if not organization:
-                        return Response(
-                            {"detail": _("Server is not configured with a default organization.")},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                        )
-                    user = User.objects.create_user(
-                        username=email,
-                        email=email,
-                        password=serializer.validated_data['password'],
-                        name=serializer.validated_data.get('name', ''),
-                        organization=organization,
-                        language=target_lang,
-                        is_active=False,
-                    )
-                elif not user.is_active:
-                    user.set_password(serializer.validated_data['password'])
-                    user.name = serializer.validated_data.get('name', '')
-                    user.language = target_lang
-                    user.updated_at = timezone.now()
-                    user.save(update_fields=['password', 'name', 'language', 'updated_at'])
-                else:
-                    return accepted_response
-
-                uid = urlsafe_base64_encode(force_bytes(user.pk))
-                token = signup_activation_token_generator.make_token(user)
-                verify_url = f"{settings.SITE_DOMAIN.rstrip('/')}/signup/verify?uid={uid}&token={token}"
-
-                transaction.on_commit(
-                    lambda: send_signup_verification_email_task.delay(
-                        email=email, verify_url=verify_url, language=target_lang
-                    )
-                )
-        except IntegrityError:
-            # Concurrent request may create the same email first.
-            return accepted_response
-
-        return accepted_response
-
-
-@extend_schema(tags=['core'])
-class SignupVerifyView(APIView):
-    permission_classes = [permissions.AllowAny]
-    throttle_scope = 'signup'
-
-    @extend_schema(
-        request=SignupVerifySerializer,
-        responses={200: SignupVerifyResponseSerializer, 400: dict, 403: dict},
-    )
-    def post(self, request):
-        if not get_dynamic_setting('ENABLE_PUBLIC_SIGNUP'):
-            return Response({"detail": _("Public signup is disabled.")}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = SignupVerifySerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        uid = serializer.validated_data['uid']
-        token = serializer.validated_data['token']
-
-        with transaction.atomic():
-            try:
-                user_id = force_str(urlsafe_base64_decode(uid))
-                user = User.objects.select_for_update().get(pk=user_id)
-            except (TypeError, ValueError, OverflowError, ValidationError, User.DoesNotExist):
-                return Response({"detail": _("Invalid verification link.")}, status=status.HTTP_400_BAD_REQUEST)
-
-            if user.is_active:
-                return Response({"detail": _("Account is already verified.")}, status=status.HTTP_400_BAD_REQUEST)
-            if not signup_activation_token_generator.check_token(user, token):
-                return Response({"detail": _("Invalid verification link.")}, status=status.HTTP_400_BAD_REQUEST)
-
-            user.is_active = True
-            user.updated_at = timezone.now()
-            user.save(update_fields=['is_active', 'updated_at'])
-
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            'user': UserSerializer(user, context={'request': request}).data,
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
-        }, status=status.HTTP_200_OK)
-
-
-@extend_schema(tags=['core'])
 class SetPasswordView(APIView):
     """View to set a user's password."""
-    permission_classes = [IsAuthenticated, APIKeyTierPermission]
+    permission_classes = [IsAuthenticated]
 
     @extend_schema(
         request=ChangePasswordSerializer,
         responses={204: None, 400: dict},
     )
     def post(self, request):
-        if isinstance(request.auth, APIKey):
-            raise exceptions.PermissionDenied('Password changes cannot be performed using API keys.')
-
         serializer = ChangePasswordSerializer(data=request.data)
         if serializer.is_valid():
             user = request.user
@@ -296,7 +161,7 @@ class SetPasswordView(APIView):
 
 @extend_schema(tags=['core'])
 class LogoutView(APIView):
-    permission_classes = [IsAuthenticated, APIKeyTierPermission]
+    permission_classes = [IsAuthenticated]
 
     class LogoutRequestSerializer(serializers.Serializer):
         refresh = serializers.CharField()
@@ -306,9 +171,6 @@ class LogoutView(APIView):
         responses={205: None, 400: dict},
     )
     def post(self, request):
-        if isinstance(request.auth, APIKey):
-            raise exceptions.PermissionDenied('Session logout is not applicable to API keys.')
-
         try:
             refresh_token = request.data["refresh"]
             token = RefreshToken(refresh_token)
@@ -328,7 +190,6 @@ class PublicSettingsView(APIView):
     permission_classes = [permissions.AllowAny]
 
     class PublicSettingsResponseSerializer(serializers.Serializer):
-        enable_public_signup = serializers.BooleanField()
         brand_name = serializers.CharField(allow_null=True)
         brand_logo_url = serializers.CharField(allow_null=True)
         brand_website_url = serializers.CharField(allow_null=True)
@@ -350,7 +211,6 @@ class PublicSettingsView(APIView):
             brand_logo_url = urljoin(settings.SITE_DOMAIN, org.brand_logo.url)
 
         return Response({
-            'enable_public_signup': get_dynamic_setting('ENABLE_PUBLIC_SIGNUP'),
             'brand_name': brand_name,
             'brand_logo_url': brand_logo_url,
             'brand_website_url': brand_website_url,
@@ -450,65 +310,3 @@ class HealthCheckView(APIView):
             return Response(health_status, status=status.HTTP_200_OK)
 
         return Response(health_status, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-
-@extend_schema(tags=['api-keys'])
-class APIKeyViewSet(mixins.CreateModelMixin,
-                    mixins.ListModelMixin,
-                    mixins.DestroyModelMixin,
-                    viewsets.GenericViewSet):
-    permission_classes = [permissions.IsAuthenticated, APIKeyTierPermission]
-    serializer_class = APIKeySerializer
-
-    def get_queryset(self):
-        return APIKey.objects.filter(user=self.request.user)
-
-    def create(self, request, *args, **kwargs):
-        serializer = APIKeyCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        name = serializer.validated_data['name']
-        tier = serializer.validated_data['tier']
-        expires_in_days = serializer.validated_data.get('expires_in_days')
-
-        if isinstance(request.auth, APIKey):
-            tier_levels = {'read_only': 1, 'read_write': 2, 'full_access': 3}
-            caller_level = tier_levels.get(request.auth.tier, 0)
-            requested_level = tier_levels.get(tier, 0)
-            if requested_level > caller_level:
-                return Response(
-                    {"detail": f"API key tier '{request.auth.tier}' cannot create a '{tier}' key."},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-        expires_at = None
-        if expires_in_days:
-            expires_at = timezone.now() + timedelta(days=expires_in_days)
-
-        raw_key, prefix, hashed_key = generate_raw_api_key()
-
-        api_key = APIKey.objects.create(
-            user=request.user,
-            name=name,
-            prefix=prefix,
-            hashed_key=hashed_key,
-            tier=tier,
-            expires_at=expires_at,
-        )
-
-        logger.info(
-            "API Key created: user_id=%s, key_id=%s, name='%s', prefix='%s', tier='%s'",
-            request.user.id, api_key.id, name, prefix, tier
-        )
-
-        res_data = APIKeySerializer(api_key).data
-        res_data['raw_key'] = raw_key
-        return Response(res_data, status=status.HTTP_201_CREATED)
-
-    def perform_destroy(self, instance):
-        logger.info(
-            "API Key revoked: user_id=%s, key_id=%s, name='%s', prefix='%s'",
-            self.request.user.id, instance.id, instance.name, instance.prefix
-        )
-        super().perform_destroy(instance)
-

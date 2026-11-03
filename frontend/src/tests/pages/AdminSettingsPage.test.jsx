@@ -19,17 +19,17 @@ describe('AdminSettingsPage typed inputs', () => {
     api.getAdminSettings.mockResolvedValue({
       data: [
         {
-          key: 'ENABLE_PUBLIC_SIGNUP',
+          key: 'FLATTEN_WATERMARKED_DOWNLOADS',
           value: false,
           value_type: 'bool',
           raw_value: 'false',
-          description: 'Enable public signup with email verification.',
+          description: 'Flatten watermarked downloads.',
         },
       ],
     })
     api.updateAdminSetting.mockResolvedValue({
       data: {
-        key: 'ENABLE_PUBLIC_SIGNUP',
+        key: 'FLATTEN_WATERMARKED_DOWNLOADS',
         value: true,
         value_type: 'bool',
         raw_value: 'true',
@@ -47,7 +47,7 @@ describe('AdminSettingsPage typed inputs', () => {
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => {
-      expect(api.updateAdminSetting).toHaveBeenCalledWith('ENABLE_PUBLIC_SIGNUP', true)
+      expect(api.updateAdminSetting).toHaveBeenCalledWith('FLATTEN_WATERMARKED_DOWNLOADS', true)
     })
   })
 

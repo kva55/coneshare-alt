@@ -777,8 +777,5 @@ export const permanentDeleteTrashItem = (id) => api.delete(`/trash/${id}/permane
 export const emptyTrash = () => api.delete('/trash/empty/');
 
 // API Keys
-export const getApiKeys = () => api.get('/api-keys/');
-export const createApiKey = (data) => api.post('/api-keys/', data);
-export const deleteApiKey = (id) => api.delete(`/api-keys/${id}/`);
 
 export default api;

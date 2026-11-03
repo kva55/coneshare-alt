@@ -142,21 +142,21 @@ class TestAdminSettingsTypedValues:
         response = admin_api_client.get('/api/v1/admin/settings/')
         assert response.status_code == status.HTTP_200_OK
         settings_by_key = {item['key']: item for item in response.json()}
-        assert settings_by_key['ENABLE_PUBLIC_SIGNUP']['value_type'] == 'bool'
-        assert isinstance(settings_by_key['ENABLE_PUBLIC_SIGNUP']['value'], bool)
+        assert settings_by_key['FLATTEN_WATERMARKED_DOWNLOADS']['value_type'] == 'bool'
+        assert isinstance(settings_by_key['FLATTEN_WATERMARKED_DOWNLOADS']['value'], bool)
         assert settings_by_key['MAX_FILES_PER_UPLOAD']['value_type'] == 'int'
         assert isinstance(settings_by_key['MAX_FILES_PER_UPLOAD']['value'], int)
 
     def test_update_bool_setting_accepts_boolean_and_persists_canonical_value(self, admin_api_client):
         response = admin_api_client.patch(
-            '/api/v1/admin/settings/ENABLE_PUBLIC_SIGNUP/',
+            '/api/v1/admin/settings/FLATTEN_WATERMARKED_DOWNLOADS/',
             {'value': True},
             format='json',
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.json()['value'] is True
         assert response.json()['value_type'] == 'bool'
-        db_value = AppConfiguration.objects.get(key='ENABLE_PUBLIC_SIGNUP').value
+        db_value = AppConfiguration.objects.get(key='FLATTEN_WATERMARKED_DOWNLOADS').value
         assert db_value == 'true'
 
     def test_update_int_setting_rejects_invalid_type(self, admin_api_client):

@@ -8,24 +8,24 @@ from core.services import get_dynamic_setting, get_max_watermark_file_size_mb
 @pytest.mark.django_db
 def test_get_dynamic_setting_bool_false_string_is_false():
     AppConfiguration.objects.update_or_create(
-        key='ENABLE_PUBLIC_SIGNUP',
-        defaults={'value': 'false', 'description': 'Enable public signup with email verification.'},
+        key='FLATTEN_WATERMARKED_DOWNLOADS',
+        defaults={'value': 'false', 'description': 'Flatten watermarked downloads.'},
     )
-    cache.delete('app_config:ENABLE_PUBLIC_SIGNUP')
+    cache.delete('app_config:FLATTEN_WATERMARKED_DOWNLOADS')
 
-    assert get_dynamic_setting('ENABLE_PUBLIC_SIGNUP') is False
+    assert get_dynamic_setting('FLATTEN_WATERMARKED_DOWNLOADS') is False
 
 
 @pytest.mark.django_db
 def test_get_dynamic_setting_bool_invalid_falls_back_to_default(settings):
-    settings.ENABLE_PUBLIC_SIGNUP = True
+    settings.FLATTEN_WATERMARKED_DOWNLOADS = True
     AppConfiguration.objects.update_or_create(
-        key='ENABLE_PUBLIC_SIGNUP',
-        defaults={'value': 'not-a-bool', 'description': 'Enable public signup with email verification.'},
+        key='FLATTEN_WATERMARKED_DOWNLOADS',
+        defaults={'value': 'not-a-bool', 'description': 'Flatten watermarked downloads.'},
     )
-    cache.delete('app_config:ENABLE_PUBLIC_SIGNUP')
+    cache.delete('app_config:FLATTEN_WATERMARKED_DOWNLOADS')
 
-    assert get_dynamic_setting('ENABLE_PUBLIC_SIGNUP') is True
+    assert get_dynamic_setting('FLATTEN_WATERMARKED_DOWNLOADS') is True
 
 
 @pytest.mark.django_db

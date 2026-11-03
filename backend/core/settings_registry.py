@@ -7,7 +7,6 @@ DEFAULT_SETTINGS = {
     'MAX_PREVIEW_PAGES': {'description': 'Maximum number of pages for document preview. Documents with more pages will be available for download only.', 'type': 'int'},
     'FILE_SIZE_QUOTA_MB': {'description': 'Per-user file size quota in MB. 0 means unlimited.', 'type': 'int'},
     'MAX_FILES_PER_UPLOAD': {'description': 'Maximum number of files allowed in a single upload operation.', 'type': 'int'},
-    'ENABLE_PUBLIC_SIGNUP': {'description': 'Enable public signup with email verification.', 'type': 'bool'},
     'FLATTEN_WATERMARKED_DOWNLOADS': {'description': 'If true, watermarked PDF downloads are flattened (rasterized to JPEGs and recompiled to PDF) to prevent watermark stripping.', 'type': 'bool'},
 }
 

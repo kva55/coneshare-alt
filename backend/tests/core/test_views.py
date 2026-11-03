@@ -12,8 +12,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from core.models import APIKey, Organization, UserGroup
-from core.authentication import generate_raw_api_key
+from core.models import Organization, UserGroup
 from rest_framework_simplejwt.tokens import RefreshToken
 
 User = get_user_model()
@@ -366,38 +365,6 @@ class TestOrganizationAccessPermissions:
 
 @pytest.mark.django_db
 class TestAuthEndpointKeyRejection:
-    def test_set_password_rejects_api_key_auth(self, public_client, user):
-        """SetPasswordView rejects API key authentication."""
-        raw_key, prefix, hashed_key = generate_raw_api_key()
-        APIKey.objects.create(
-            user=user,
-            name='Test Key',
-            prefix=prefix,
-            hashed_key=hashed_key,
-            tier='full_access',
-        )
-        public_client.credentials(HTTP_AUTHORIZATION=f'Bearer {raw_key}')
-        payload = {
-            'old_password': 'password',
-            'new_password1': 'NewValidPass123!',
-            'new_password2': 'NewValidPass123!',
-        }
-        resp = public_client.post('/api/v1/users/set-password/', payload, format='json')
-        assert resp.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_logout_rejects_api_key_auth(self, public_client, user):
-        """LogoutView rejects API key authentication."""
-        raw_key, prefix, hashed_key = generate_raw_api_key()
-        APIKey.objects.create(
-            user=user,
-            name='Test Key',
-            prefix=prefix,
-            hashed_key=hashed_key,
-            tier='full_access',
-        )
-        public_client.credentials(HTTP_AUTHORIZATION=f'Bearer {raw_key}')
-        resp = public_client.post('/api/v1/logout/', {'refresh': 'fake-token'}, format='json')
-        assert resp.status_code == status.HTTP_403_FORBIDDEN
 
     def test_logout_rejects_other_user_refresh_token(self, api_client, user, user2):
         """LogoutView rejects refresh tokens belonging to a different user."""

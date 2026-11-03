@@ -22,8 +22,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from core.views import (CustomTokenObtainPairView, LanguagesView, LogoutView, PublicSettingsView,
-                        SetPasswordView, SignupRequestView,
-                        SignupVerifyView)
+                        SetPasswordView)
 
 
 urlpatterns = [
@@ -31,9 +30,6 @@ urlpatterns = [
     path('api-auth/', include('rest_framework.urls')),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/schema/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    # path('api/v1/register/', RegisterView.as_view(), name='register'),
-    path('api/v1/signup/', SignupRequestView.as_view(), name='signup_request'),
-    path('api/v1/signup/verify/', SignupVerifyView.as_view(), name='signup_verify'),
     path('api/v1/languages/', LanguagesView.as_view(), name='languages'),
     path('api/v1/public/settings/', PublicSettingsView.as_view(), name='public_settings'),
     path('api/v1/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),

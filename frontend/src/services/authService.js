@@ -28,17 +28,6 @@ const logout = async () => {
   }
 };
 
-const requestSignup = async ({ email, password, name = '' }) => {
-  const response = await api.post('/signup/', { email, password, name });
-  return response.data;
-};
-
-const verifySignup = async ({ uid, token }) => {
-  const response = await api.post('/signup/verify/', { uid, token });
-  storeTokens(response.data);
-  return response.data;
-};
-
 const getPublicSettings = async () => {
   const response = await api.get('/public/settings/');
   return response.data;
@@ -47,7 +36,5 @@ const getPublicSettings = async () => {
 export const authService = {
   login,
   logout,
-  requestSignup,
-  verifySignup,
   getPublicSettings,
 };

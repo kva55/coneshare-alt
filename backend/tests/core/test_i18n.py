@@ -1,15 +1,10 @@
-import os
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from core.i18n_utils import resolve_email_language
-from core.models import AppConfiguration
-from core.tasks import send_signup_verification_email_task
-from sharelinks.models import ViewSession
 
 User = get_user_model()
 
@@ -126,55 +121,6 @@ class TestUserLanguagePreference:
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         assert resp.data['old_password'] == ['Onjuist wachtwoord.']
 
-    @pytest.mark.parametrize("lang, expected_subject, expected_snippet", [
-        ("en", "Verify your Coneshare account", "Welcome to Coneshare."),
-        ("zh-hans", "验证您的 Coneshare 账号", "欢迎使用 Coneshare。"),
-        ("ru", "Подтвердите ваш аккаунт Coneshare", "Добро пожаловать в Coneshare."),
-        ("de", "Bestätigen Sie Ihr Coneshare-Konto", "Willkommen bei Coneshare."),
-        ("fr", "Vérifiez votre compte Coneshare", "Bienvenue sur Coneshare."),
-        ("nl", "Verifieer uw Coneshare-account", "Welkom bij Coneshare."),
-    ])
-    def test_signup_verification_email_task_language_override(self, mailoutbox, lang, expected_subject, expected_snippet):
-        """Verify Celery signup verification email task respects language override for subject and body."""
-        mailoutbox.clear()
-        send_signup_verification_email_task(
-            email='user@example.com',
-            verify_url='https://example.com/verify',
-            language=lang
-        )
-        assert len(mailoutbox) == 1
-        msg = mailoutbox[0]
-        assert msg.to == ['user@example.com']
-        assert msg.subject == expected_subject
-        assert expected_snippet in msg.body
-
-    def test_signup_request_uses_user_language_when_no_accept_header(self, db, monkeypatch):
-        """Verify signup verification email uses user's language preference when Accept-Language header is omitted."""
-        AppConfiguration.objects.update_or_create(
-            key='ENABLE_PUBLIC_SIGNUP',
-            defaults={'value': 'true', 'description': 'Enable public signup.'}
-        )
-        cache.clear()
-        captured = {}
-
-        def _fake_delay(email, verify_url, language):
-            captured['language'] = language
-
-        monkeypatch.setattr('core.views.transaction.on_commit', lambda fn: fn())
-        monkeypatch.setattr('core.views.send_signup_verification_email_task.delay', _fake_delay)
-
-        user = User.objects.create_user(
-            username="inactive@example.com",
-            email="inactive@example.com",
-            password="StrongPassword123!",
-            language="zh-hans",
-            is_active=False
-        )
-        client = APIClient()
-        url = reverse('signup_request')
-        resp = client.post(url, {'email': 'inactive@example.com', 'password': 'StrongPassword123!', 'name': 'Inactive User'})
-        assert resp.status_code == status.HTTP_202_ACCEPTED
-        assert captured.get('language') == 'zh-hans'
 
     @pytest.mark.parametrize("lang, expected_subject, expected_snippet", [
         ("en", "Verify your email to view 'Test Document.pdf'", "Please click the link below to view 'Test Document.pdf'."),
@@ -197,40 +143,6 @@ class TestUserLanguagePreference:
         assert msg.subject == expected_subject
         assert expected_snippet in msg.body
 
-
-    def test_signup_request_preserves_user_language_when_accept_header_unsupported(self, db, monkeypatch):
-        """Verify signup verification email preserves user's language when Accept-Language header is unsupported."""
-        AppConfiguration.objects.update_or_create(
-            key='ENABLE_PUBLIC_SIGNUP',
-            defaults={'value': 'true', 'description': 'Enable public signup.'}
-        )
-        cache.clear()
-        captured = {}
-
-        def _fake_delay(email, verify_url, language):
-            captured['language'] = language
-
-        monkeypatch.setattr('core.views.transaction.on_commit', lambda fn: fn())
-        monkeypatch.setattr('core.views.send_signup_verification_email_task.delay', _fake_delay)
-
-        user = User.objects.create_user(
-            username="inactive_ru@example.com",
-            email="inactive_ru@example.com",
-            password="StrongPassword123!",
-            language="ru",
-            is_active=False
-        )
-        client = APIClient()
-        url = reverse('signup_request')
-        resp = client.post(
-            url,
-            {'email': 'inactive_ru@example.com', 'password': 'StrongPassword123!', 'name': 'Inactive User'},
-            HTTP_ACCEPT_LANGUAGE='ja-JP,ja;q=0.9'
-        )
-        assert resp.status_code == status.HTTP_202_ACCEPTED
-        assert captured.get('language') == 'ru'
-        user.refresh_from_db()
-        assert user.language == 'ru'
 
 
     def test_sharelink_viewer_email_verification_falls_back_to_en_regardless_of_owner(self, mailoutbox, share_link_requires_email_verification):

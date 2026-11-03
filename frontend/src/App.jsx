@@ -14,8 +14,6 @@ const lazyNamed = (importer, name) =>
 
 // Public / auth routes
 const LoginPage = lazy(() => import('./pages/LoginPage'));
-const SignupPage = lazyNamed(() => import('./pages/SignupPage'), 'SignupPage');
-const SignupVerifyPage = lazyNamed(() => import('./pages/SignupVerifyPage'), 'SignupVerifyPage');
 const ShareLinkViewerPage = lazyNamed(() => import('./pages/ShareLinkViewerPage'), 'ShareLinkViewerPage');
 const ErrorPage = lazyNamed(() => import('./pages/ErrorPage'), 'ErrorPage');
 const NotFoundPage = lazyNamed(() => import('./pages/NotFoundPage'), 'NotFoundPage');
@@ -34,7 +32,6 @@ const AllViewSessionsPage = lazyNamed(() => import('./pages/AllViewSessionsPage'
 const AutomationsPage = lazyNamed(() => import('./pages/AutomationsPage'), 'AutomationsPage');
 const UserSettingsPage = lazy(() => import('./pages/UserSettingsPage'));
 const PasswordSettingsPage = lazy(() => import('./pages/PasswordSettingsPage'));
-const ApiKeysSettingsPage = lazy(() => import('./pages/ApiKeysSettingsPage'));
 const AdminSettingsPage = lazyNamed(() => import('./pages/AdminSettingsPage'), 'AdminSettingsPage');
 const AdminBrandingPage = lazyNamed(() => import('./pages/AdminBrandingPage'), 'AdminBrandingPage');
 const AdminLoginActivityPage = lazyNamed(() => import('./pages/AdminLoginActivityPage'), 'AdminLoginActivityPage');
@@ -60,8 +57,6 @@ function App() {
             <Suspense fallback={<RouteLoadingFallback />}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
-                <Route path="/signup" element={<SignupPage />} />
-                <Route path="/signup/verify" element={<SignupVerifyPage />} />
                 <Route path="/view/:slug" element={<ShareLinkViewerPage />} />
                 <Route path="/500" element={<ErrorPage />} />
                 <Route element={<AuthGuard />}>
@@ -80,7 +75,6 @@ function App() {
                     <Route path="/automations" element={<AutomationsPage />} />
                     <Route path="/settings" element={<UserSettingsPage />} />
                     <Route path="/settings/password" element={<PasswordSettingsPage />} />
-                    <Route path="/settings/api-keys" element={<ApiKeysSettingsPage />} />
                     <Route path="/admin/settings" element={<AdminSettingsPage />} />
                     <Route path="/admin/branding" element={<AdminBrandingPage />} />
                     <Route path="/admin/users" element={<AdminUsersPage />} />
