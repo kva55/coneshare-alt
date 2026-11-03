@@ -18,6 +18,13 @@ services:
     volumes:
       - ./core:/app
       - ~/.coneshare-data:/storage
+    healthcheck:
+      # The dev image compiles the service with air on start; allow time for the first build.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 120s
 
   backend:
     <<: *default-logging
@@ -33,8 +40,10 @@ services:
       - "8000:8000"
     restart: unless-stopped
     depends_on:
-      - redis
-      - core
+      redis:
+        condition: service_started
+      core:
+        condition: service_healthy
     env_file: .env
 
   redis:
@@ -53,9 +62,12 @@ services:
       - ./backend:/app
     restart: unless-stopped
     depends_on:
-      - backend
-      - redis
-      - core
+      backend:
+        condition: service_started
+      redis:
+        condition: service_started
+      core:
+        condition: service_healthy
     env_file: .env
 
   celery_beat:

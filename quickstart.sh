@@ -60,6 +60,19 @@ ensure_env() {
   rm -f .env.bak
 }
 
+wait_for_core() {
+  log "Waiting for the file service (core) to finish compiling and listen on :8080..."
+  local i
+  for i in $(seq 1 90); do
+    if "${DC[@]}" exec -T core wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  "${DC[@]}" logs --tail=80 core || true
+  die "File service (core) did not come up. See the log output above."
+}
+
 wait_for_backend() {
   log "Waiting for the backend to answer (first build can take several minutes)..."
   local i
@@ -106,7 +119,11 @@ cmd_up() {
   mkdir -p "${STORAGE_DIR}"
   log "Building and starting containers"
   "${DC[@]}" up -d --build
+  wait_for_core
   wait_for_backend
+  log "Checking that the backend can reach the file service"
+  "${DC[@]}" exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://core:8080/health', timeout=5)" \
+    || die "Backend cannot reach core:8080. Check: ./quickstart.sh logs"
   log "Applying database migrations"
   "${DC[@]}" exec -T backend python manage.py migrate --noinput
   create_admin

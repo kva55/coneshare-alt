@@ -4,8 +4,8 @@ FROM golang:1.26-alpine
 # Set the working directory inside the container
 WORKDIR /app
 
-# Install Air for hot-reloading
-RUN go install github.com/air-verse/air@latest
+# Install Air for hot-reloading (pinned; @latest made image builds non-reproducible)
+RUN go install github.com/air-verse/air@v1.61.7
 
 # Copy dependency files and download them to leverage Docker's layer caching.
 COPY go.mod go.sum ./
