@@ -2,9 +2,7 @@ import os
 import posixpath
 import re
 from urllib.parse import unquote
-import mimetypes
 import logging
-import requests
 import uuid
 from typing import Optional, List, Set, Union
 from django.utils import timezone
@@ -19,12 +17,11 @@ from rest_framework.exceptions import APIException
 
 from backend.utils import get_unique_name
 from core.models import User
-from core.services import get_dynamic_setting
 from .fileserver import fileserver_client
 from .models import Document, DocumentPage, DocumentVersion, Folder
 from .renderers import get_renderer_for_file, normalize_content_type
 from .renderers.constants import PDF_MIMETYPE
-from .tasks import generate_pdf_pages_task
+from .tasks import generate_pdf_pages_task  # noqa: F401 - patch target in tests
 SERVER_RENDERABLE_TYPES = {'pdf'}
 
 
@@ -707,159 +704,6 @@ def copy_document(original_doc: Document, user: User) -> Document:
             logger.error(f"Failed to cleanup orphaned file {new_storage_key}: {cleanup_e}")
         raise e
 
-
-def create_new_document_version(
-    document: Document,
-    requesting_user: User,
-    storage_key: str,
-    file_size: int,
-    content_type: str,
-) -> DocumentVersion:
-    """
-    Handles creating a new version of a document, routing to the correct
-    processing task based on file type and size.
-    """
-    ensure_storage_key_not_claimed(storage_key, document.organization_id)
-    validate_file_content_type_and_extension(document.name, storage_key, content_type)
-
-    content_type = normalize_content_type(content_type, document.name)
-    doc_type = _get_doc_type_from_content_type(content_type, document.name)
-
-    with transaction.atomic():
-        locked_doc = Document.objects.select_for_update().get(pk=document.pk)
-        old_file_size = locked_doc.file_size or 0
-        is_vault_doc = is_dataroom_vault_document(locked_doc)
-
-        # Compute next version number under row lock to prevent concurrent version number conflicts
-        latest_version = locked_doc.versions.order_by('-version_number').first()
-        new_version_number = (latest_version.version_number if latest_version else 0) + 1
-
-        if is_vault_doc:
-            enforce_dataroom_storage_quota(locked_doc, file_size - old_file_size, lock=True)
-
-        # Update user's total document size for personal documents (vault documents are tracked under datarooms)
-        if not is_vault_doc and requesting_user and old_file_size != file_size:
-            User.objects.filter(pk=requesting_user.pk).update(
-                total_document_size=F('total_document_size') - old_file_size + file_size
-            )
-
-        # 2. Clear the current primary. After a promote, this may not be the latest version.
-        locked_doc.versions.filter(is_primary=True).update(is_primary=False)
-
-        # 3. Create the new version record
-        new_version = DocumentVersion.objects.create(
-            document=locked_doc,
-            version_number=new_version_number,
-            original_storage_key=storage_key,
-            storage_key=storage_key,
-            is_primary=True,
-            content_type=content_type,
-            file_size=file_size,
-            type=doc_type
-        )
-
-        # 4. Route for processing
-        _route_document_for_processing(
-            document=locked_doc,
-            version=new_version,
-            file_size=file_size,
-            content_type=content_type,
-        )
-
-        # Refresh caller's document instance after the locked update so callers have up-to-date attributes
-        if document and getattr(document, 'pk', None) == locked_doc.pk:
-            document.refresh_from_db()
-
-    return new_version
-
-
-def promote_document_version(document: Document, version: DocumentVersion, requesting_user: User):
-    """
-    Promotes a specific DocumentVersion to be the active (primary) version of the Document.
-    Synchronizes parent Document fields with the promoted version's metadata.
-    """
-    if version.document != document:
-        raise ValidationError("The selected version does not belong to this document.")
-
-    if version.is_primary:
-        raise ValidationError("This version is already the active version.")
-
-    new_file_size = version.file_size or 0
-
-    with transaction.atomic():
-        # Obtain select_for_update lock on document to prevent concurrency issues.
-        # Read old_file_size from the locked row (Rule 1: never read quota-sensitive
-        # fields from the un-locked argument before acquiring the lock).
-        locked_doc = Document.objects.select_for_update().get(pk=document.pk)
-        old_file_size = locked_doc.file_size or 0
-
-        is_vault_doc = is_dataroom_vault_document(locked_doc)
-
-        if not is_vault_doc and requesting_user and new_file_size > old_file_size:
-            check_user_quota_on_upload(
-                user=requesting_user,
-                new_file_size=new_file_size,
-                document_to_update=locked_doc
-            )
-        elif is_vault_doc:
-            enforce_dataroom_storage_quota(
-                locked_doc,
-                new_file_size - old_file_size,
-                lock=True,
-                action_verb="Promoting"
-            )
-
-
-
-        # Deactivate all current primary versions
-        document.versions.filter(is_primary=True).update(is_primary=False)
-
-        # Activate the chosen version
-        version.is_primary = True
-        version.save(update_fields=['is_primary', 'updated_at'])
-
-        # Sync fields onto the Document
-        locked_doc.file_size = new_file_size
-        locked_doc.content_type = version.content_type
-        locked_doc.type = version.type
-        locked_doc.storage_key = version.storage_key
-        locked_doc.original_storage_key = version.original_storage_key
-        locked_doc.num_pages = version.num_pages
-
-        # Determine download_only based on render capabilities
-        max_preview_file_size_mb = get_dynamic_setting('MAX_PREVIEW_FILE_SIZE_MB')
-        max_size_bytes = max_preview_file_size_mb * 1024 * 1024
-        is_too_large = new_file_size > max_size_bytes
-
-        is_previewable = version.type == 'pdf' and not is_too_large
-
-        locked_doc.download_only = not is_previewable
-
-        # Map version's render_status to Document status
-        if version.render_status == DocumentVersion.RENDER_FAILED:
-            locked_doc.status = 'error'
-            locked_doc.status_message = version.render_error or 'An error occurred during preview generation.'
-        elif version.render_status in (DocumentVersion.RENDER_QUEUED, DocumentVersion.RENDER_PROCESSING):
-            locked_doc.status = 'processing'
-            locked_doc.status_message = 'Generating preview...'
-        else:
-            locked_doc.status = 'ready'
-            locked_doc.status_message = ''
-
-        locked_doc.save()
-
-        # Update user's total document size for personal documents (vault documents are tracked under datarooms)
-        if not is_vault_doc and requesting_user and old_file_size != new_file_size:
-            User.objects.filter(pk=requesting_user.pk).update(
-                total_document_size=F('total_document_size') - old_file_size + new_file_size
-            )
-
-    # Since locked_doc was retrieved via select_for_update() as a separate Python object instance,
-    # changes made and saved to locked_doc won't be visible on the original 'document' instance
-    # passed to this function. Refresh from DB to ensure the caller (e.g. view serializer)
-    # receives up-to-date metadata in memory.
-    document.refresh_from_db()
-    touch_folder_ancestors(document.folder)
 
 
 def soft_delete_document(document: Document, user: User):

@@ -22,7 +22,6 @@ const NotFoundPage = lazyNamed(() => import('./pages/NotFoundPage'), 'NotFoundPa
 const HomePage = lazy(() => import('./pages/HomePage'));
 const DocumentsPage = lazy(() => import('./pages/DocumentsPage'));
 const DocumentPage = lazyNamed(() => import('./pages/DocumentPage'), 'DocumentPage');
-const DocumentVersionsPage = lazyNamed(() => import('./pages/DocumentVersionsPage'), 'DocumentVersionsPage');
 const ShareLinkAnalyticsPage = lazyNamed(() => import('./pages/ShareLinkAnalyticsPage'), 'ShareLinkAnalyticsPage');
 const TrashPage = lazy(() => import('./pages/TrashPage'));
 const DataroomsPage = lazyNamed(() => import('./pages/DataroomsPage'), 'DataroomsPage');
@@ -65,7 +64,6 @@ function App() {
                     <Route path="/documents" element={<DocumentsPage />} />
                     <Route path="/documents/folders/:folderId" element={<DocumentsPage />} />
                     <Route path="/documents/:documentId" element={<DocumentPage />} />
-                    <Route path="/documents/:documentId/versions" element={<DocumentVersionsPage />} />
                     <Route path="/documents/:documentId/links/:linkId" element={<ShareLinkAnalyticsPage />} />
                     <Route path="/trash" element={<TrashPage />} />
                     <Route path="/datarooms" element={<DataroomsPage />} />

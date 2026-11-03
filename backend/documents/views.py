@@ -2,15 +2,14 @@ import logging
 import os
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urljoin
 
-from django.conf import settings
+from django.conf import settings  # noqa: F401 - patch target in tests
 from django.db import transaction
 from django.db.models import Count, Sum, Value, CharField, BigIntegerField, F, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework import permissions, serializers, status, viewsets, throttling
+from rest_framework import serializers, status, viewsets, throttling
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.response import Response
@@ -21,9 +20,13 @@ from core.pagination import StandardResultsSetPagination
 
 
 from .models import (Document, Folder, DocumentVersion)
-from .serializers import (DocumentSerializer, EnsureFolderPathsSerializer,
-                          FolderSerializer, DocumentVersionListSerializer,
-                          TrashItemSerializer, TrashRestoreResponseSerializer)
+from .serializers import (
+    DocumentSerializer,
+    EnsureFolderPathsSerializer,
+    FolderSerializer,
+    TrashItemSerializer,
+    TrashRestoreResponseSerializer,
+)
 from .fileserver import fileserver_client
 from .services import (
     _get_unique_folder_name,
@@ -31,7 +34,6 @@ from .services import (
     QuotaExceededError,
     check_user_quota_on_upload,
     create_document_from_upload,
-    create_new_document_version,
     delete_document_and_files,
     delete_folder_and_contents,
     soft_delete_document,
@@ -41,13 +43,10 @@ from .services import (
     generate_storage_key,
     copy_document,
     preview_status_for_render_status,
-    promote_document_version,
     touch_folder_ancestors,
     validate_storage_key,
     validate_file_content_type_and_extension,
     ensure_storage_key_not_claimed,
-    is_dataroom_vault_document,
-    enforce_dataroom_storage_quota,
 )
 
 from .renderers import get_renderer
@@ -463,152 +462,6 @@ class EnsureFolderPathsView(APIView):
             )
 
 
-@extend_schema(tags=['documents'])
-class DocumentVersionUploadRequestView(APIView):
-    """
-    Requests a temporary, secure URL for uploading a new document version.
-    """
-
-    class DocumentVersionUploadRequestSerializer(serializers.Serializer):
-        file_name = serializers.CharField()
-        file_size = serializers.IntegerField(min_value=1)
-
-    class DocumentVersionUploadResponseSerializer(serializers.Serializer):
-        upload_url = serializers.CharField()
-        storage_key = serializers.CharField()
-
-    @extend_schema(
-        request=DocumentVersionUploadRequestSerializer,
-        responses={200: DocumentVersionUploadResponseSerializer, 400: dict, 404: dict},
-    )
-    def post(self, request, document_id, *args, **kwargs):
-        try:
-            document = Document.objects.active().get(id=document_id, created_by=request.user)
-        except Document.DoesNotExist:
-            return Response({"detail": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = self.DocumentVersionUploadRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        validated_data = serializer.validated_data
-
-        try:
-            if is_dataroom_vault_document(document):
-                old_size = document.file_size or 0
-                delta = validated_data['file_size'] - old_size
-                enforce_dataroom_storage_quota(document, delta, lock=False)
-            else:
-                check_user_quota_on_upload(
-                    user=request.user,
-                    new_file_size=validated_data['file_size'],
-                    document_to_update=document
-                )
-        except QuotaExceededError as e:
-            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        file_name = validated_data['file_name']
-
-        storage_key = generate_storage_key(request.user.organization.id, file_name)
-
-        try:
-            upload_url = fileserver_client.generate_upload_url(storage_key, is_internal=False)
-        except APIException as e:
-            logger.error(f"Failed to get upload URL from file server: {e}")
-            return Response({"detail": str(e.detail)}, status=e.status_code)
-
-        return Response({
-            'upload_url': upload_url,
-            'storage_key': storage_key,
-        }, status=status.HTTP_200_OK)
-
-
-@extend_schema(tags=['documents'])
-class DocumentVersionUploadFinalizeView(APIView):
-    """
-    Finalizes a new document version upload after the file has been sent to the file server.
-    """
-
-    class FinalizeSerializer(serializers.Serializer):
-        storage_key = serializers.CharField()
-        content_type = serializers.CharField(allow_blank=True)
-
-    @extend_schema(
-        request=FinalizeSerializer,
-        responses={202: DocumentSerializer, 400: dict, 404: dict, 500: dict},
-    )
-    def post(self, request, document_id, *args, **kwargs):
-        try:
-            document = Document.objects.active().get(id=document_id, created_by=request.user)
-        except Document.DoesNotExist:
-            return Response({"detail": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = self.FinalizeSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        validated_data = serializer.validated_data
-
-        try:
-            validated_data['storage_key'] = validate_storage_key(
-                validated_data['storage_key'], document.organization.id
-            )
-            ensure_storage_key_not_claimed(
-                validated_data['storage_key'], document.organization.id
-            )
-            validate_file_content_type_and_extension(
-                document.name,
-                validated_data.get('storage_key', ''),
-                validated_data.get('content_type', '')
-            )
-        except serializers.ValidationError as e:
-            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            file_info = fileserver_client.get_file_info(validated_data['storage_key'])
-        except APIException as e:
-            logger.error(f"Failed to check file info for key {validated_data['storage_key']}: {e}")
-            return Response(
-                {"detail": "Failed to verify file on storage server."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-
-        if not file_info or not file_info.get('exists') or file_info.get('size', 0) <= 0:
-            return Response(
-                {"detail": "Uploaded file not found on storage server."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        actual_file_size = file_info['size']
-
-        try:
-            if not is_dataroom_vault_document(document):
-                check_user_quota_on_upload(
-                    user=request.user,
-                    new_file_size=actual_file_size,
-                    document_to_update=document
-                )
-        except QuotaExceededError as e:
-            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            create_new_document_version(
-                document=document,
-                requesting_user=request.user,
-                storage_key=validated_data['storage_key'],
-                file_size=actual_file_size,
-                content_type=validated_data['content_type'],
-            )
-        except (serializers.ValidationError, QuotaExceededError) as e:
-            detail = e.detail if hasattr(e, 'detail') else str(e)
-            return Response({'detail': detail} if isinstance(detail, str) else detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.error(f"Failed to finalize document version upload for doc {document_id}: {e}")
-            return Response(
-                {"detail": f"Failed to finalize document processing: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        document.refresh_from_db()
-        doc_serializer = DocumentSerializer(document, context={'request': request})
-        return Response(doc_serializer.data, status=status.HTTP_202_ACCEPTED)
-
 
 def prepare_pages_data(
     document,
@@ -700,24 +553,14 @@ class DocumentPreviewDataView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        version_id = request.query_params.get('version_id')
-        if version_id:
-            if document.status == 'uploading':
-                return Response(
-                    {"detail": "Document is not ready for preview."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        elif document.status != 'ready':
+        if document.status != 'ready':
             return Response(
                 {"detail": "Document is not ready for preview."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         # Data Fetching
-        if version_id:
-            primary_version = get_object_or_404(document.versions, id=version_id)
-        else:
-            primary_version = document.versions.filter(is_primary=True).first()
+        primary_version = document.versions.filter(is_primary=True).first()
 
         if not primary_version:
             return Response(
@@ -1036,39 +879,6 @@ class DocumentViewSet(viewsets.ModelViewSet):
             'total_downloads': total_downloads,
         })
 
-    @action(detail=True, methods=['post'])
-    def promote_version(self, request, pk=None):
-        """
-        Promotes a specific DocumentVersion to be the active (primary) version of the Document.
-        """
-        document = self.get_object()
-        if document.created_by != request.user and getattr(request.user, 'role', '') != 'admin':
-            raise PermissionDenied("You do not have permission to modify versions of this document.")
-
-        version_id = request.data.get('version_id')
-        if not version_id:
-            return Response({'detail': 'version_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        version = get_object_or_404(document.versions, id=version_id)
-
-        try:
-            promote_document_version(document, version, request.user)
-        except QuotaExceededError as e:
-            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except DjangoValidationError as e:
-            return Response(
-                {'detail': e.message if hasattr(e, 'message') else str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except Exception:
-            logger.exception(f"Failed to promote version {version_id} for document {document.id}")
-            return Response(
-                {'detail': 'An internal error occurred. Please try again later.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        serializer = self.get_serializer(document)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='rebuild-preview')
     def rebuild_preview(self, request, pk=None):
@@ -1079,11 +889,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         if document.created_by != request.user and getattr(request.user, 'role', '') != 'admin':
             raise PermissionDenied("You do not have permission to rebuild preview for this document.")
 
-        version_id = request.data.get('version_id')
-        if version_id:
-            primary_version = get_object_or_404(document.versions, id=version_id)
-        else:
-            primary_version = document.versions.filter(is_primary=True).first()
+        primary_version = document.versions.filter(is_primary=True).first()
 
         if not primary_version:
             return Response(
@@ -1132,23 +938,6 @@ class DocumentViewSet(viewsets.ModelViewSet):
             "preview_status": preview_status,
             "render_status": render_status,
         }, status=status.HTTP_200_OK)
-
-    @action(detail=True, methods=['get'])
-    def versions(self, request, pk=None):
-        """
-        Retrieves a list of DocumentVersions for the given Document.
-        """
-        document = self.get_object()
-        versions = document.versions.all().order_by('-version_number')
-        
-        paginator = StandardResultsSetPagination()
-        page = paginator.paginate_queryset(versions, request, view=self)
-        if page is not None:
-            serializer = DocumentVersionListSerializer(page, many=True, context={'request': request})
-            return paginator.get_paginated_response(serializer.data)
-            
-        serializer = DocumentVersionListSerializer(versions, many=True, context={'request': request})
-        return Response(serializer.data)
 
 
 @extend_schema(tags=['documents'])

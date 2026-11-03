@@ -220,29 +220,6 @@ export const uploadDocument = async (file, path, onProgress) => {
   });
 };
 
-export const uploadNewVersion = async (documentId, file) => {
-  // Step 1: Request an upload URL
-  const requestResponse = await api.post(`/uploads/document/${documentId}/versions/request/`, {
-    file_name: file.name,
-    file_size: file.size,
-  });
-
-  const { upload_url, storage_key } = requestResponse.data;
-
-  // Step 2: Upload the file directly to the file server
-  await axios.put(upload_url, file, {
-    headers: {
-      'Content-Type': file.type,
-    },
-  });
-
-  // Step 3: Finalize the upload
-  return api.post(`/uploads/document/${documentId}/versions/finalize/`, {
-    storage_key,
-    content_type: file.type,
-  });
-};
-
 export const getFolderContents = (id) => api.get(`/folders/${id}/`);
 
 export const getRootFolderContents = () => api.get('/folders/');
@@ -299,11 +276,7 @@ export const rebuildDocumentPreview = (id, versionId = null) => {
   return api.post(`/documents/${id}/rebuild-preview/`, data);
 };
 
-export const promoteDocumentVersion = (documentId, versionId) =>
-  api.post(`/documents/${documentId}/promote_version/`, { version_id: versionId });
 
-export const getDocumentVersions = (documentId, page = 1) =>
-  api.get(`/documents/${documentId}/versions/`, { params: { page } });
 
 export const getDocumentDownloadUrl = (id) => api.get(`/documents/${id}/download/`);
 

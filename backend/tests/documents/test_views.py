@@ -1318,98 +1318,6 @@ def test_soft_delete_document_in_subfolder_success(api_client, user, organizatio
     assert Document.objects.deleted().filter(id=doc.id).exists()
 
 
-@pytest.mark.django_db
-class TestDocumentVersionUploadViews:
-    """Tests for the two-step document version upload process."""
-
-    @pytest.fixture
-    def document_with_version(self, document):
-        """Fixture for a document that has one version."""
-        initial_version = document.versions.get(is_primary=True)
-        return document, initial_version
-
-    @patch('documents.views.fileserver_client.get_file_info', return_value={'exists': True, 'size': 11})
-    @patch('documents.services.generate_pdf_pages_task.delay')
-    @patch('documents.views.fileserver_client.generate_upload_url')
-    def test_upload_new_version_success(self, mock_fs_upload_url, mock_task_delay, mock_fs_get_file_info, api_client, document_with_version):
-        """Test successfully uploading a new version of a document."""
-        mock_fs_upload_url.return_value = "/files/upload/some-token"
-        doc, initial_version = document_with_version
-
-        # Step 1: Request upload URL
-        request_url = f'/api/v1/uploads/document/{doc.id}/versions/request/'
-        request_response = api_client.post(request_url, {'file_name': 'v2.pdf', 'file_size': 11})
-        assert request_response.status_code == status.HTTP_200_OK, request_response.json()
-        upload_data = request_response.json()
-        assert upload_data['upload_url'] == "/files/upload/some-token"
-        assert 'storage_key' in upload_data
-
-        # Step 2: Finalize upload
-        finalize_url = f'/api/v1/uploads/document/{doc.id}/versions/finalize/'
-        finalize_data = {
-            'storage_key': upload_data['storage_key'],
-            'content_type': 'application/pdf'
-        }
-        finalize_response = api_client.post(finalize_url, finalize_data)
-
-        assert finalize_response.status_code == status.HTTP_202_ACCEPTED
-
-        doc.refresh_from_db()
-        initial_version.refresh_from_db()
-
-        assert doc.status == 'ready'
-        assert doc.versions.count() == 2
-
-        new_version = doc.versions.get(version_number=2)
-        assert new_version.is_primary is True
-        assert new_version.file_size == 11
-        assert initial_version.is_primary is False
-        assert new_version.render_status == DocumentVersion.RENDER_NOT_GENERATED
-
-        mock_task_delay.assert_not_called()
-
-    def test_finalize_version_rejects_invalid_or_unauthorized_storage_key(self, api_client, user):
-        """Test finalizing a new version with an invalid, unauthorized, or traversing storage key returns HTTP 400."""
-        api_client.force_authenticate(user=user)
-        doc = Document.objects.create(
-            organization=user.organization, created_by=user, name="test_ver_doc.pdf", status='ready'
-        )
-        DocumentVersion.objects.create(document=doc, version_number=1, is_primary=True)
-
-        finalize_url = f'/api/v1/uploads/document/{doc.id}/versions/finalize/'
-        org_id = user.organization.id
-
-        invalid_keys = [
-            '../run/secrets/app/secret_key',
-            f"{org_id}/../secret.txt",
-            f"{org_id}/%2e%2e/secret.txt",
-            f"{org_id}/%252e%252e/secret.txt",
-            'other_org/ab/malicious.pdf',
-            'no_prefix_key.pdf',
-        ]
-
-        for key in invalid_keys:
-            finalize_data = {
-                'storage_key': key,
-                'file_size': 100,
-                'content_type': 'application/pdf',
-            }
-            response = api_client.post(finalize_url, finalize_data)
-            assert response.status_code == status.HTTP_400_BAD_REQUEST, f"Key {key} should have been rejected with 400, got {response.status_code}"
-
-    def test_upload_version_for_other_user_doc_permission_denied(self, api_client, user2):
-
-        """Test a user cannot upload a new version to another user's document."""
-        doc_by_user2 = Document.objects.create(
-            organization=user2.organization, created_by=user2, name="user2_doc.pdf", status='ready'
-        )
-        DocumentVersion.objects.create(document=doc_by_user2, version_number=1, is_primary=True)
-
-        request_url = f'/api/v1/uploads/document/{doc_by_user2.id}/versions/request/'
-        response = api_client.post(request_url, {'file_name': 'v2.pdf'})
-
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-
 
 @pytest.mark.django_db
 class TestDocumentViewSet:
@@ -1782,58 +1690,6 @@ class TestQuotaAndSizeTracking:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "Folder path 'NonExistentFolder' does not exist." in response.data['detail']
 
-    @patch('documents.views.fileserver_client.get_file_info')
-    @patch('documents.services.generate_pdf_pages_task.delay')
-    @patch('documents.views.fileserver_client.generate_upload_url')
-    def test_document_lifecycle_updates_user_size(self, mock_fs_upload_url, mock_pdf_task, mock_fs_get_file_info, api_client, user):
-        """
-        Test that creating, versioning, and deleting documents correctly updates
-        the user's total_document_size.
-        """
-        mock_fs_upload_url.return_value = "/files/upload/token"
-        assert user.total_document_size == 0
-
-        # 1. Create a document (1MB)
-        file_size_1 = 1 * 1024 * 1024
-        mock_fs_get_file_info.side_effect = [
-            {'exists': True, 'size': file_size_1},
-            {'exists': True, 'size': 2 * 1024 * 1024},
-        ]
-        finalize_data = {
-            'storage_key': f"{user.organization.id}/key1",
-            'unique_name': 'doc1.pdf',
-            'content_type': 'application/pdf',
-        }
-        response = api_client.post('/api/v1/uploads/document/finalize/', finalize_data)
-        assert response.status_code == status.HTTP_202_ACCEPTED
-        user.refresh_from_db()
-        assert user.total_document_size == file_size_1
-        doc = Document.objects.get(name='doc1.pdf')
-
-        # 2. Upload a new version (2MB)
-        file_size_2 = 2 * 1024 * 1024
-        finalize_version_url = f'/api/v1/uploads/document/{doc.id}/versions/finalize/'
-        finalize_version_data = {
-            'storage_key': f"{user.organization.id}/key2",
-            'content_type': 'application/pdf'
-        }
-
-        api_client.post(finalize_version_url, finalize_version_data)
-        user.refresh_from_db()
-        # Size should now be 2MB, not 3MB (old was replaced)
-        assert user.total_document_size == file_size_2
-
-        # 3. Soft Delete the document
-        api_client.delete(f'/api/v1/documents/{doc.id}/')
-        user.refresh_from_db()
-        # Size should still be 2MB
-        assert user.total_document_size == file_size_2
-
-        # 4. Permanent Delete the document from trash
-        api_client.delete(f'/api/v1/trash/{doc.id}/permanent/')
-        user.refresh_from_db()
-        assert user.total_document_size == 0
-
 
 def test_document_status_endpoint(api_client, user, organization):
     """Test retrieving document status via the lightweight status endpoint."""
@@ -1852,438 +1708,6 @@ def test_document_status_endpoint(api_client, user, organization):
         'status_message': 'Downloading from cloud...'
     }
 
-
-@pytest.mark.django_db
-def test_promote_version_endpoint_success(api_client, user, organization):
-    """Test promoting a document version via the API."""
-    doc = Document.objects.create(
-        name="Promote API Test.pdf",
-        organization=organization,
-        created_by=user,
-        status="ready",
-        file_size=100,
-    )
-    v1 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        file_size=100,
-        content_type="application/pdf",
-        original_storage_key="v1.pdf",
-        storage_key="v1.pdf",
-        type="pdf",
-    )
-    v2 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=2,
-        is_primary=False,
-        file_size=200,
-        content_type="application/pdf",
-        original_storage_key="v2.pdf",
-        storage_key="v2.pdf",
-        type="pdf",
-    )
-
-    response = api_client.post(
-        f'/api/v1/documents/{doc.id}/promote_version/',
-        {'version_id': str(v2.id)}
-    )
-    assert response.status_code == status.HTTP_200_OK
-    assert response.data['file_size'] == 200
-    assert response.data['storage_key'] == "v2.pdf"
-    
-    doc.refresh_from_db()
-    v1.refresh_from_db()
-    v2.refresh_from_db()
-    
-    assert not v1.is_primary
-    assert v2.is_primary
-    assert doc.file_size == 200
-    assert doc.storage_key == "v2.pdf"
-
-
-@pytest.mark.django_db
-def test_promote_version_endpoint_wrong_doc(api_client, user, organization):
-    """Test promoting a version that belongs to a different document returns 404."""
-    doc1 = Document.objects.create(
-        name="Doc1.pdf",
-        organization=organization,
-        created_by=user,
-    )
-    doc2 = Document.objects.create(
-        name="Doc2.pdf",
-        organization=organization,
-        created_by=user,
-    )
-    v_other = DocumentVersion.objects.create(
-        document=doc2,
-        version_number=1,
-        is_primary=True,
-        file_size=100,
-        content_type="application/pdf",
-        original_storage_key="other.pdf",
-        storage_key="other.pdf",
-        type="pdf",
-    )
-
-    response = api_client.post(
-        f'/api/v1/documents/{doc1.id}/promote_version/',
-        {'version_id': str(v_other.id)}
-    )
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-
-
-
-@pytest.mark.django_db
-def test_list_versions_endpoint_success(api_client, user, organization):
-    """Test retrieving document version history via the API."""
-    doc = Document.objects.create(
-        name="List Versions Test.pdf",
-        organization=organization,
-        created_by=user,
-    )
-    v1 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        file_size=100,
-        content_type="application/pdf",
-        original_storage_key="v1.pdf",
-        storage_key="v1.pdf",
-        type="pdf",
-    )
-    v2 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=2,
-        is_primary=False,
-        file_size=200,
-        content_type="application/pdf",
-        original_storage_key="v2.pdf",
-        storage_key="v2.pdf",
-        type="pdf",
-    )
-
-    response = api_client.get(f'/api/v1/documents/{doc.id}/versions/')
-    assert response.status_code == status.HTTP_200_OK
-    
-    data = response.json()
-    assert isinstance(data, dict)
-    assert 'count' in data
-    assert 'results' in data
-    assert data['count'] == 2
-    
-    results = data['results']
-    assert len(results) == 2
-    assert results[0]['version_number'] == 2
-    assert results[1]['version_number'] == 1
-    assert 'pages' not in results[0]
-
-
-@pytest.mark.django_db
-@patch('core.services.get_dynamic_setting')
-def test_promote_version_endpoint_respects_quota(mock_get_setting, api_client, user, organization):
-    """Test that promoting a version that exceeds user storage quota fails."""
-    def get_setting_mock(key):
-        if key == 'FILE_SIZE_QUOTA_MB':
-            return 1
-        elif key == 'MAX_PREVIEW_FILE_SIZE_MB':
-            return 100
-        elif key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-            return 100
-        return 0
-    mock_get_setting.side_effect = get_setting_mock
-
-    doc = Document.objects.create(
-        name="Doc.pdf",
-        organization=organization,
-        created_by=user,
-        status="ready",
-        file_size=500 * 1024,
-    )
-    v1 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        file_size=500 * 1024,
-        content_type="application/pdf",
-        original_storage_key="v1.pdf",
-        storage_key="v1.pdf",
-        type="pdf",
-    )
-    v2 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=2,
-        is_primary=False,
-        file_size=1500 * 1024,
-        content_type="application/pdf",
-        original_storage_key="v2.pdf",
-        storage_key="v2.pdf",
-        type="pdf",
-    )
-    user.total_document_size = 500 * 1024
-    user.save()
-
-    response = api_client.post(
-        f'/api/v1/documents/{doc.id}/promote_version/',
-        {'version_id': str(v2.id)}
-    )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "exceed your storage quota" in response.json()['detail']
-
-
-@pytest.mark.django_db
-@patch('core.services.get_dynamic_setting')
-def test_promote_version_endpoint_vault_document_bypasses_user_quota(mock_get_setting, api_client, user, organization):
-    """Test that promoting a version on a vault document succeeds even when user personal quota is full."""
-    def get_setting_mock(key):
-        if key == 'FILE_SIZE_QUOTA_MB':
-            return 1  # 1 MB quota limit
-        elif key == 'MAX_PREVIEW_FILE_SIZE_MB':
-            return 100
-        elif key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-            return 100
-        return 0
-    mock_get_setting.side_effect = get_setting_mock
-
-    root_folder = Folder.objects.create(
-        name="__root__",
-        organization=organization,
-        created_by=None,
-        parent=None,
-        folder_type=Folder.FOLDER_TYPE_ROOT,
-    )
-    vault_folder = Folder.objects.create(
-        name="__datarooms__",
-        organization=organization,
-        created_by=None,
-        parent=root_folder,
-        folder_type=Folder.FOLDER_TYPE_VAULT,
-    )
-    room_folder = Folder.objects.create(
-        name="Room_1",
-        organization=organization,
-        created_by=None,
-        parent=vault_folder,
-        folder_type=Folder.FOLDER_TYPE_VAULT,
-    )
-
-    doc = Document.objects.create(
-        name="VaultDoc.pdf",
-        organization=organization,
-        created_by=user,
-        folder=room_folder,
-        status="ready",
-        file_size=500 * 1024,
-    )
-    v1 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        file_size=500 * 1024,
-        content_type="application/pdf",
-        original_storage_key="v1.pdf",
-        storage_key="v1.pdf",
-        type="pdf",
-    )
-    v2 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=2,
-        is_primary=False,
-        file_size=2 * 1024 * 1024,  # 2 MB (> 1 MB user personal quota)
-        content_type="application/pdf",
-        original_storage_key="v2.pdf",
-        storage_key="v2.pdf",
-        type="pdf",
-    )
-    user.total_document_size = 1024 * 1024
-    user.save()
-
-    response = api_client.post(
-        f'/api/v1/documents/{doc.id}/promote_version/',
-        {'version_id': str(v2.id)}
-    )
-    assert response.status_code == status.HTTP_200_OK
-    doc.refresh_from_db()
-    assert doc.file_size == 2 * 1024 * 1024
-    user.refresh_from_db()
-    assert user.total_document_size == 1024 * 1024
-
-
-@pytest.mark.django_db
-@patch('documents.views.fileserver_client.generate_upload_url')
-@patch('core.services.get_dynamic_setting')
-def test_version_upload_request_vault_document_bypasses_user_quota(mock_get_setting, mock_gen_url, api_client, user, organization):
-    """Test that requesting a version upload for a vault document succeeds even when user personal quota is full."""
-    mock_get_setting.side_effect = lambda key: 1 if key == 'FILE_SIZE_QUOTA_MB' else 100
-    mock_gen_url.return_value = "https://files.coneshare.com/upload/mock"
-
-    root_folder = Folder.objects.create(name="__root__", organization=organization, created_by=None, parent=None, folder_type=Folder.FOLDER_TYPE_ROOT)
-    vault_folder = Folder.objects.create(name="__datarooms__", organization=organization, created_by=None, parent=root_folder, folder_type=Folder.FOLDER_TYPE_VAULT)
-    room_folder = Folder.objects.create(name="Room_1", organization=organization, created_by=None, parent=vault_folder, folder_type=Folder.FOLDER_TYPE_VAULT)
-
-    doc = Document.objects.create(name="VaultDoc.pdf", organization=organization, created_by=user, folder=room_folder, status="ready", file_size=500 * 1024)
-    user.total_document_size = 1024 * 1024  # 1MB limit reached
-    user.save()
-
-    response = api_client.post(
-        f'/api/v1/uploads/document/{doc.id}/versions/request/',
-        {'file_name': 'VaultDoc_v2.pdf', 'file_size': 2 * 1024 * 1024}
-    )
-    assert response.status_code == status.HTTP_200_OK
-    assert 'upload_url' in response.json()
-
-
-@pytest.mark.django_db
-@patch('documents.views.fileserver_client.get_file_info')
-@patch('documents.services._route_document_for_processing')
-@patch('core.services.get_dynamic_setting')
-def test_version_upload_finalize_vault_document_does_not_consume_user_quota(mock_get_setting, mock_route, mock_get_info, api_client, user, organization):
-    """Test that finalizing a version upload for a vault document does not update user's total_document_size."""
-    mock_get_setting.side_effect = lambda key: 1 if key == 'FILE_SIZE_QUOTA_MB' else 100
-    mock_get_info.return_value = {'exists': True, 'size': 2 * 1024 * 1024}
-
-    root_folder = Folder.objects.create(name="__root__", organization=organization, created_by=None, parent=None, folder_type=Folder.FOLDER_TYPE_ROOT)
-    vault_folder = Folder.objects.create(name="__datarooms__", organization=organization, created_by=None, parent=root_folder, folder_type=Folder.FOLDER_TYPE_VAULT)
-    room_folder = Folder.objects.create(name="Room_1", organization=organization, created_by=None, parent=vault_folder, folder_type=Folder.FOLDER_TYPE_VAULT)
-
-    doc = Document.objects.create(name="VaultDoc.pdf", organization=organization, created_by=user, folder=room_folder, status="ready", file_size=500 * 1024)
-    user.total_document_size = 1000
-    user.save()
-
-    storage_key = f"{organization.id}/vault_v2_new.pdf"
-    response = api_client.post(
-        f'/api/v1/uploads/document/{doc.id}/versions/finalize/',
-        {
-            'storage_key': storage_key,
-            'content_type': 'application/pdf',
-        }
-    )
-    assert response.status_code == status.HTTP_202_ACCEPTED
-    user.refresh_from_db()
-    assert user.total_document_size == 1000, "User total_document_size must remain unchanged for vault uploads"
-
-
-@pytest.mark.django_db
-@patch('documents.views.fileserver_client.get_file_info')
-@patch('documents.services._route_document_for_processing')
-@patch('core.services.get_dynamic_setting')
-def test_version_upload_finalize_vault_document_quota_exceeded_returns_400(mock_get_setting, mock_route, mock_get_info, api_client, user, organization):
-    """Test that finalizing a version upload for a vault document exceeding Dataroom quota returns 400 Bad Request (not 500)."""
-    from datarooms.models import Dataroom, DataroomDocument
-
-    mock_get_setting.side_effect = lambda key: 100
-    # 2MB version exceeds 1MB Dataroom quota
-    mock_get_info.return_value = {'exists': True, 'size': 2 * 1024 * 1024}
-
-    room = Dataroom.objects.create(
-        name="Small Room",
-        organization=organization,
-        created_by=user,
-        storage_quota_mb=1,
-    )
-
-    root_folder = Folder.objects.create(name="__root__", organization=organization, created_by=None, parent=None, folder_type=Folder.FOLDER_TYPE_ROOT)
-    vault_folder = Folder.objects.create(name="__datarooms__", organization=organization, created_by=None, parent=root_folder, folder_type=Folder.FOLDER_TYPE_VAULT)
-    room_folder = Folder.objects.create(name="Small_Room", organization=organization, created_by=None, parent=vault_folder, folder_type=Folder.FOLDER_TYPE_VAULT)
-
-    doc = Document.objects.create(name="VaultDoc.pdf", organization=organization, created_by=user, folder=room_folder, status="ready", file_size=500 * 1024)
-    DataroomDocument.objects.create(dataroom=room, document=doc, name="VaultDoc.pdf")
-
-    storage_key = f"{organization.id}/vault_v2_oversize.pdf"
-    response = api_client.post(
-        f'/api/v1/uploads/document/{doc.id}/versions/finalize/',
-        {
-            'storage_key': storage_key,
-            'content_type': 'application/pdf',
-        }
-    )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "exceed the Dataroom storage limit" in response.json()['detail']
-
-
-
-def test_preview_data_endpoint_document_uploading_state(api_client, user, organization):
-    """Test retrieving preview data when document is in uploading state."""
-    doc = Document.objects.create(
-        name="Test.pdf",
-        organization=organization,
-        created_by=user,
-        status="uploading",
-        file_size=100,
-    )
-    v1 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        file_size=100,
-        content_type="application/pdf",
-        original_storage_key="v1.pdf",
-        storage_key="v1.pdf",
-        type="pdf",
-    )
-    # Even with a specific version_id, preview should be rejected since document is uploading
-    response = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/?version_id={v1.id}')
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.json()['detail'] == "Document is not ready for preview."
-
-
-@pytest.mark.django_db
-def test_soft_deleted_document_not_accessible_via_document_viewset(api_client, user, organization):
-    """
-    RED Test: Verify soft-deleted documents return 404 on retrieve, status, download,
-    preview-data, versions endpoints, and are excluded from folder list query.
-    """
-    root_folder = Folder.objects.get_root_for_org(organization)
-    doc = Document.objects.create(
-        name="DeletedDoc.pdf",
-        organization=organization,
-        created_by=user,
-        folder=root_folder,
-        status="ready",
-        file_size=100,
-        type="pdf",
-    )
-    DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        file_size=100,
-        content_type="application/pdf",
-        original_storage_key="v1.pdf",
-        storage_key="v1.pdf",
-        type="pdf",
-    )
-
-    # Soft delete the document
-    api_client.delete(f'/api/v1/documents/{doc.id}/')
-
-    # 1. Retrieve -> 404
-    res = api_client.get(f'/api/v1/documents/{doc.id}/')
-    assert res.status_code == status.HTTP_404_NOT_FOUND
-
-    # 2. List in folder -> should not include doc
-    res = api_client.get(f'/api/v1/documents/?folder={root_folder.id}')
-    assert res.status_code == status.HTTP_200_OK
-    data = res.json()
-    items_list = data['results'] if isinstance(data, dict) and 'results' in data else data
-    doc_ids = [d['id'] for d in items_list]
-    assert doc.id not in doc_ids
-
-    # 3. Status endpoint -> 404
-    res = api_client.get(f'/api/v1/documents/{doc.id}/status/')
-    assert res.status_code == status.HTTP_404_NOT_FOUND
-
-    # 4. Download endpoint -> 404
-    res = api_client.get(f'/api/v1/documents/{doc.id}/download/')
-    assert res.status_code == status.HTTP_404_NOT_FOUND
-
-    # 5. Preview data -> 404
-    res = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/')
-    assert res.status_code == status.HTTP_404_NOT_FOUND
-
-    # 6. Versions endpoint -> 404
-    res = api_client.get(f'/api/v1/documents/{doc.id}/versions/')
-    assert res.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db
@@ -2787,45 +2211,6 @@ class TestDocumentUploadConstraints:
         assert res.status_code == status.HTTP_400_BAD_REQUEST
         assert 'conflicts with file extension' in str(res.data)
 
-    @patch('documents.views.fileserver_client.get_file_info')
-    def test_version_upload_request_and_finalize_rejects_negative_and_zero_file_size(self, mock_get_info, api_client, user, organization):
-        api_client.force_authenticate(user=user)
-        doc = Document.objects.create(
-            name="VersionDoc.pdf",
-            organization=organization,
-            created_by=user,
-            file_size=1024,
-        )
-        DocumentVersion.objects.create(document=doc, version_number=1, is_primary=True)
-
-        res_req = api_client.post(f'/api/v1/uploads/document/{doc.id}/versions/request/', {
-            'file_name': 'v2.pdf',
-            'file_size': -500,
-        }, format='json')
-        assert res_req.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'file_size' in res_req.data
-
-        # Finalize when storage server reports missing / zero file
-        mock_get_info.return_value = {'exists': False, 'size': 0}
-        res_fin = api_client.post(f'/api/v1/uploads/document/{doc.id}/versions/finalize/', {
-            'storage_key': f'{organization.id}/v2.pdf',
-            'content_type': 'application/pdf',
-        }, format='json')
-        assert res_fin.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'Uploaded file not found' in res_fin.data['detail']
-
-        # Finalize when storage server reports actual size 4096
-        mock_get_info.return_value = {'exists': True, 'size': 4096}
-        res_fin_ok = api_client.post(f'/api/v1/uploads/document/{doc.id}/versions/finalize/', {
-            'storage_key': f'{organization.id}/v2.pdf',
-            'file_size': 1,  # client-provided size is ignored in favor of physical file size
-            'content_type': 'application/pdf',
-        }, format='json')
-        assert res_fin_ok.status_code == status.HTTP_202_ACCEPTED
-        assert res_fin_ok.data['file_size'] == 4096
-        doc.refresh_from_db()
-        new_version = doc.versions.get(version_number=2)
-        assert new_version.file_size == 4096
 
     @patch('documents.views.fileserver_client.get_file_info', return_value={'exists': True, 'size': 1024})
     def test_upload_finalize_rejects_already_claimed_storage_key(self, mock_get_info, api_client, user, user2, organization):
@@ -2848,31 +2233,6 @@ class TestDocumentUploadConstraints:
         assert res.status_code == status.HTTP_400_BAD_REQUEST
         assert 'This storage key has already been registered.' in res.data['detail']
 
-    @patch('documents.views.fileserver_client.get_file_info', return_value={'exists': True, 'size': 1024})
-    def test_version_upload_finalize_rejects_already_claimed_storage_key(self, mock_get_info, api_client, user, organization):
-        """Version finalize must reject a storage key that is already referenced in the organization."""
-        claimed_key = f"{organization.id}/doc/version_claimed.pdf"
-        Document.objects.create(
-            name="Doc1.pdf",
-            organization=organization,
-            created_by=user,
-            original_storage_key=claimed_key,
-            storage_key=claimed_key,
-        )
-        doc2 = Document.objects.create(
-            name="Doc2.pdf",
-            organization=organization,
-            created_by=user,
-        )
-        DocumentVersion.objects.create(document=doc2, version_number=1, is_primary=True)
-
-        api_client.force_authenticate(user=user)
-        res = api_client.post(f'/api/v1/uploads/document/{doc2.id}/versions/finalize/', {
-            'storage_key': claimed_key,
-            'content_type': 'application/pdf',
-        }, format='json')
-        assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'This storage key has already been registered.' in res.data['detail']
 
     def test_patch_document_ignores_read_only_fields_and_preserves_folder(self, api_client, user, user2, organization):
         """DocumentViewSet PATCH ignores read-only attributes and preserves folder structure."""
@@ -2947,6 +2307,85 @@ class TestFolderHierarchyBoundary:
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
 
 
+@pytest.mark.django_db
+def test_soft_deleted_document_not_accessible_via_document_viewset(api_client, user, organization):
+    """
+    RED Test: Verify soft-deleted documents return 404 on retrieve, status, download,
+    preview-data, versions endpoints, and are excluded from folder list query.
+    """
+    root_folder = Folder.objects.get_root_for_org(organization)
+    doc = Document.objects.create(
+        name="DeletedDoc.pdf",
+        organization=organization,
+        created_by=user,
+        folder=root_folder,
+        status="ready",
+        file_size=100,
+        type="pdf",
+    )
+    DocumentVersion.objects.create(
+        document=doc,
+        version_number=1,
+        is_primary=True,
+        file_size=100,
+        content_type="application/pdf",
+        original_storage_key="v1.pdf",
+        storage_key="v1.pdf",
+        type="pdf",
+    )
+
+    # Soft delete the document
+    api_client.delete(f'/api/v1/documents/{doc.id}/')
+
+    # 1. Retrieve -> 404
+    res = api_client.get(f'/api/v1/documents/{doc.id}/')
+    assert res.status_code == status.HTTP_404_NOT_FOUND
+
+    # 2. List in folder -> should not include doc
+    res = api_client.get(f'/api/v1/documents/?folder={root_folder.id}')
+    assert res.status_code == status.HTTP_200_OK
+    data = res.json()
+    items_list = data['results'] if isinstance(data, dict) and 'results' in data else data
+    doc_ids = [d['id'] for d in items_list]
+    assert doc.id not in doc_ids
+
+    # 3. Status endpoint -> 404
+    res = api_client.get(f'/api/v1/documents/{doc.id}/status/')
+    assert res.status_code == status.HTTP_404_NOT_FOUND
+
+    # 4. Download endpoint -> 404
+    res = api_client.get(f'/api/v1/documents/{doc.id}/download/')
+    assert res.status_code == status.HTTP_404_NOT_FOUND
+
+    # 5. Preview data -> 404
+    res = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/')
+    assert res.status_code == status.HTTP_404_NOT_FOUND
+
+    # 6. Versions endpoint -> 404
+    res = api_client.get(f'/api/v1/documents/{doc.id}/versions/')
+    assert res.status_code == status.HTTP_404_NOT_FOUND
 
 
-
+def test_preview_data_endpoint_document_uploading_state(api_client, user, organization):
+    """Test retrieving preview data when document is in uploading state."""
+    doc = Document.objects.create(
+        name="Test.pdf",
+        organization=organization,
+        created_by=user,
+        status="uploading",
+        file_size=100,
+    )
+    v1 = DocumentVersion.objects.create(
+        document=doc,
+        version_number=1,
+        is_primary=True,
+        file_size=100,
+        content_type="application/pdf",
+        original_storage_key="v1.pdf",
+        storage_key="v1.pdf",
+        type="pdf",
+    )
+    # Even with a specific version_id, preview should be rejected since document is uploading
+    response = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/?version_id={v1.id}')
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()['detail'] == "Document is not ready for preview."

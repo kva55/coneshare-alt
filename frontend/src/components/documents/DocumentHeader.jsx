@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../../utils/formatters';
-import { Eye, Upload, Pencil } from 'lucide-react';
+import { Eye, Pencil } from 'lucide-react';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import {
@@ -23,9 +23,7 @@ export function DocumentHeader({
   document,
   onCreateLink,
   onPreview,
-  onUploadNewVersion,
   onDownload,
-  onVersionHistory,
   onDelete,
   onRenameDocument,
   isProcessing,
@@ -147,36 +145,6 @@ export function DocumentHeader({
           </Tooltip>
 
           {canManage && (
-            <DropdownMenu>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>
-                    <DropdownMenuTrigger asChild disabled={isProcessing}>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="mr-2"
-                        disabled={isProcessing}
-                      >
-                        <Upload className="h-5 w-5" />
-                        <span className="sr-only">{t('documents.uploadNewVersion')}</span>
-                      </Button>
-                    </DropdownMenuTrigger>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>{t('documents.uploadNewVersion')}</p>
-                </TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent>
-                <DropdownMenuItem onSelect={onUploadNewVersion}>
-                  {t('documents.uploadFromComputer')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-
-          {canManage && (
             <Button className="mr-2" onClick={onCreateLink} disabled={isProcessing}>
               <PlusIcon className="-ml-1 mr-2 h-5 w-5" />
               {t('documents.getLink')}
@@ -192,7 +160,6 @@ export function DocumentHeader({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={onDownload}>{t('documents.download')}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={onVersionHistory}>{t('documents.versions')}</DropdownMenuItem>
               {canManage && (
                 <DropdownMenuItem
                   onSelect={onDelete}
