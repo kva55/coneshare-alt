@@ -8,6 +8,8 @@
 #   ./quickstart.sh stop       stop the stack (data is kept)
 #   ./quickstart.sh reset      stop and delete ALL local data (database, uploaded files, .env)
 #
+# To remove containers, images, all data and this folder: ./quickclose.sh
+#
 # This is a development/test setup only (Django runserver, DEBUG=True, console email).
 # Do not expose it to a network you do not trust.
 set -euo pipefail
@@ -124,6 +126,7 @@ cmd_up() {
     ./quickstart.sh logs
 
   Other commands: ./quickstart.sh test | check | stop | reset
+  Remove everything (containers, images, data, this folder): ./quickclose.sh
 EOF
 }
 
@@ -169,5 +172,5 @@ case "${1:-up}" in
   logs)     "${DC[@]}" logs -f ;;
   stop)     "${DC[@]}" stop ;;
   reset)    cmd_reset ;;
-  *)        sed -n '2,12p' "$0"; exit 1 ;;
+  *)        sed -n '2,14p' "$0"; exit 1 ;;
 esac

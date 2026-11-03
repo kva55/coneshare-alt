@@ -8,6 +8,10 @@ Run `./quickstart.sh check` (migrations match models) and `./quickstart.sh test`
 (all test suites) first — neither could be run in the environment the changes
 were made in.
 
+When you are done: `./quickclose.sh` removes the containers, images, all
+data and this folder (`--keep-code` keeps the source; it asks you to type
+DELETE first, and warns about unpushed commits).
+
 ## Removed — confirm these are gone
 
 | # | Item | How to check |
