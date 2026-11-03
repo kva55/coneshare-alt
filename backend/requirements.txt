@@ -3,6 +3,10 @@ djangorestframework==3.18.2
 drf-spectacular==0.28.0
 python-ulid==3.0.0
 celery[redis]==5.4.0
+# celery 5.4 does not pin its transport; an unpinned kombu (>=5.5) needs redis-py>=6.1,
+# which celery[redis] 5.4 excludes. Pin a compatible pair.
+kombu==5.4.2
+redis==5.2.1
 pdf2image==1.17.0
 djangorestframework-simplejwt==5.3.1
 Pillow==13.0.0
