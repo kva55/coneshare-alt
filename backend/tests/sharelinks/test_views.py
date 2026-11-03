@@ -1625,55 +1625,6 @@ class TestDataroomVisitTracking:
         assert "link_settings" in data
         assert data['link_settings']['allow_download'] is False  # Should reflect the specific setting
 
-    def test_get_document_from_dataroom_link_returns_dataroom_context(self, public_client, user, dataroom, document):
-        """
-        Test that fetching a document from a dataroom link returns the parent dataroom
-        branding context and correct parent folder ID.
-        """
-        folder = DataroomFolder.objects.create(dataroom=dataroom, name="Nested Folder")
-        ddoc = DataroomDocument.objects.create(dataroom=dataroom, document=document, folder=folder)
-        link = ShareLink.objects.create(dataroom=dataroom, created_by=user)
-
-        url = f"/api/v1/links/{link.slug}/view-data/?dataroom_document_id={ddoc.id}"
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert "dataroom_context" in data
-        ctx = data["dataroom_context"]
-        assert ctx["id"] == str(dataroom.id)
-        assert ctx["name"] == dataroom.name
-        assert ctx["parent_folder_id"] == str(folder.id)
-        assert ctx["brand_primary_color"] == dataroom.brand_primary_color
-        assert ctx["banner_mode"] == "single"
-        assert ctx["banner_images"] == []
-        assert ctx["logo_mode"] == "org"
-        assert "resolved_brand_logo_url" in ctx
-
-    def test_get_dataroom_root_link_returns_banner_and_logo_data(self, public_client, user, dataroom):
-        from datarooms.models import DataroomBannerImage
-        from django.core.files.uploadedfile import SimpleUploadedFile
-
-        dataroom.banner_mode = "gallery"
-        dataroom.logo_mode = "dataroom"
-        dataroom.brand_logo_override = SimpleUploadedFile("override.png", b"testpngbytes", content_type="image/png")
-        dataroom.save()
-
-        img = SimpleUploadedFile("g1.png", b"testimg", content_type="image/png")
-        DataroomBannerImage.objects.create(dataroom=dataroom, image=img, caption="Gallery 1", position=0)
-
-        link = ShareLink.objects.create(dataroom=dataroom, created_by=user)
-        url = f"/api/v1/links/{link.slug}/view-data/"
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data["banner_mode"] == "gallery"
-        assert len(data["banner_images"]) == 1
-        assert data["banner_images"][0]["caption"] == "Gallery 1"
-        assert data["logo_mode"] == "dataroom"
-        assert data["brand_logo_override"] is not None
-        assert data["resolved_brand_logo_url"] is not None
 
     def test_get_standalone_document_link_does_not_return_dataroom_context(self, public_client, user, document):
         """
@@ -1855,6 +1806,50 @@ class TestDataroomVisitTracking:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.json()["message"] == "Watermarking is not enabled for this file."
+
+    def test_get_dataroom_root_link_returns_banner_and_logo_data(self, public_client, user, dataroom):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        dataroom.banner_mode = "none"
+        dataroom.logo_mode = "dataroom"
+        dataroom.brand_logo_override = SimpleUploadedFile("override.png", b"testpngbytes", content_type="image/png")
+        dataroom.save()
+
+        link = ShareLink.objects.create(dataroom=dataroom, created_by=user)
+        url = f"/api/v1/links/{link.slug}/view-data/"
+        response = public_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["banner_mode"] == "none"
+        assert "banner_images" not in data
+        assert "brand_primary_color" not in data
+        assert data["logo_mode"] == "dataroom"
+        assert data["brand_logo_override"] is not None
+        assert data["resolved_brand_logo_url"] is not None
+
+    def test_get_document_from_dataroom_link_returns_dataroom_context(self, public_client, user, dataroom, document):
+        """
+        Test that fetching a document from a dataroom link returns the parent dataroom
+        branding context and correct parent folder ID.
+        """
+        folder = DataroomFolder.objects.create(dataroom=dataroom, name="Nested Folder")
+        ddoc = DataroomDocument.objects.create(dataroom=dataroom, document=document, folder=folder)
+        link = ShareLink.objects.create(dataroom=dataroom, created_by=user)
+
+        url = f"/api/v1/links/{link.slug}/view-data/?dataroom_document_id={ddoc.id}"
+        response = public_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "dataroom_context" in data
+        ctx = data["dataroom_context"]
+        assert ctx["id"] == str(dataroom.id)
+        assert ctx["name"] == dataroom.name
+        assert ctx["parent_folder_id"] == str(folder.id)
+        assert ctx["banner_mode"] == "single"
+        assert ctx["logo_mode"] == "org"
+        assert "resolved_brand_logo_url" in ctx
 
 
 @pytest.mark.django_db

@@ -13,26 +13,6 @@ from datarooms.models import (
 pytestmark = pytest.mark.django_db
 
 
-def test_dataroom_creation(organization, user):
-    """Test that a Dataroom instance can be created."""
-    dataroom = Dataroom.objects.create(
-        name="Test Dataroom", organization=organization, created_by=user
-    )
-    assert isinstance(dataroom, Dataroom)
-    assert str(dataroom) == "Test Dataroom"
-    assert dataroom.organization == organization
-    assert dataroom.created_by == user
-    assert not dataroom.branding_banner
-    assert dataroom.branding_banner.name in (None, "")
-    assert dataroom.brand_primary_color is None
-    assert dataroom.brand_secondary_color is None
-    assert dataroom.brand_accent_color is None
-    assert dataroom.show_file_index is True
-    assert dataroom.banner_mode == "single"
-    assert dataroom.logo_mode == "org"
-    assert not dataroom.brand_logo_override
-    assert dataroom.brand_logo_override.name in (None, "")
-
 
 def test_dataroom_branding_logo_upload_path(organization, user):
     dataroom = Dataroom.objects.create(
@@ -40,25 +20,6 @@ def test_dataroom_branding_logo_upload_path(organization, user):
     )
     expected = f"dataroom-branding/{organization.id}/{dataroom.id}/logo.png"
     assert dataroom.brand_logo_override.field.generate_filename(dataroom, "logo.png") == expected
-
-
-def test_dataroom_banner_image_model(dataroom):
-    from datarooms.models import DataroomBannerImage
-    from django.core.files.uploadedfile import SimpleUploadedFile
-
-    image_file = SimpleUploadedFile("banner1.png", b"fakeimagebytes", content_type="image/png")
-    banner = DataroomBannerImage.objects.create(
-        dataroom=dataroom,
-        image=image_file,
-        caption="Sample Banner",
-        position=2
-    )
-    assert banner.dataroom == dataroom
-    assert banner.caption == "Sample Banner"
-    assert banner.position == 2
-    assert str(banner.dataroom_id) in str(banner)
-    assert f"banner image #{banner.position}" in str(banner)
-    assert banner.image.name.startswith(f"dataroom-branding/{dataroom.organization.id}/{dataroom.id}/gallery/")
 
 
 
@@ -219,3 +180,21 @@ def test_system_vault_lookup_scopes_created_by_none(dataroom, user, organization
     assert storage_folder.created_by is None
     assert storage_folder.folder_type == Folder.FOLDER_TYPE_VAULT
 
+
+
+def test_dataroom_creation(organization, user):
+    """Test that a Dataroom instance can be created."""
+    dataroom = Dataroom.objects.create(
+        name="Test Dataroom", organization=organization, created_by=user
+    )
+    assert isinstance(dataroom, Dataroom)
+    assert str(dataroom) == "Test Dataroom"
+    assert dataroom.organization == organization
+    assert dataroom.created_by == user
+    assert not dataroom.branding_banner
+    assert dataroom.branding_banner.name in (None, "")
+    assert dataroom.show_file_index is True
+    assert dataroom.banner_mode == "single"
+    assert dataroom.logo_mode == "org"
+    assert not dataroom.brand_logo_override
+    assert dataroom.brand_logo_override.name in (None, "")

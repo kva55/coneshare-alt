@@ -239,13 +239,9 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
         show_file_index: data.dataroom_context.show_file_index,
         branding_banner: data.dataroom_context.branding_banner,
         banner_mode: data.dataroom_context.banner_mode,
-        banner_images: data.dataroom_context.banner_images || [],
         logo_mode: data.dataroom_context.logo_mode,
         brand_logo_override: data.dataroom_context.brand_logo_override,
         resolved_brand_logo_url: data.dataroom_context.resolved_brand_logo_url,
-        brand_primary_color: data.dataroom_context.brand_primary_color,
-        brand_secondary_color: data.dataroom_context.brand_secondary_color,
-        brand_accent_color: data.dataroom_context.brand_accent_color,
         breadcrumbs: [],
         items: [],
       };
@@ -501,9 +497,6 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
             name: data.dataroom_context.name,
             show_file_index: data.dataroom_context.show_file_index,
             branding_banner: data.dataroom_context.branding_banner,
-            brand_primary_color: data.dataroom_context.brand_primary_color,
-            brand_secondary_color: data.dataroom_context.brand_secondary_color,
-            brand_accent_color: data.dataroom_context.brand_accent_color,
           }));
         }
       }
@@ -885,9 +878,9 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
   };
 
   const themeStyle = {
-    '--viewer-primary': scopeData.brand_primary_color || '#111827',
-    '--viewer-secondary': scopeData.brand_secondary_color || '#4b5563',
-    '--viewer-accent': scopeData.brand_accent_color || '#1f2937',
+    '--viewer-primary': '#111827',
+    '--viewer-secondary': '#4b5563',
+    '--viewer-accent': '#1f2937',
   };
 
   const isDocActive = showDocumentViewer;

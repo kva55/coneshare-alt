@@ -85,27 +85,6 @@ class TestDataroomViewSet:
         assert dataroom.organization == organization
         assert dataroom.created_by == user
 
-    def test_update_dataroom_branding_fields(self, api_client, dataroom):
-        url = f'/api/v1/datarooms/{dataroom.id}/'
-        response = api_client.patch(url, {
-            "brand_primary_color": "#112233",
-            "brand_secondary_color": "#445566",
-            "brand_accent_color": "#778899AA",
-            "show_file_index": False,
-        }, format="json")
-
-        assert response.status_code == status.HTTP_200_OK
-        dataroom.refresh_from_db()
-        assert dataroom.brand_primary_color == "#112233"
-        assert dataroom.brand_secondary_color == "#445566"
-        assert dataroom.brand_accent_color == "#778899AA"
-        assert dataroom.show_file_index is False
-
-    def test_update_dataroom_branding_invalid_color_fails(self, api_client, dataroom):
-        url = f'/api/v1/datarooms/{dataroom.id}/'
-        response = api_client.patch(url, {"brand_primary_color": "blue"}, format="json")
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "brand_primary_color" in response.data
 
     def test_remove_dataroom_banner(self, api_client, dataroom):
         dataroom.branding_banner = SimpleUploadedFile("banner.jpg", b"fake-image-bytes", content_type="image/jpeg")
@@ -1541,6 +1520,16 @@ class TestDataroomViewSet:
         assert not Document.objects.filter(id=backing_doc.id).exists()
         assert not DataroomDocument.objects.filter(id__in=[direct_ddoc.id, linked_ddoc.id]).exists()
 
+    def test_update_dataroom_branding_fields(self, api_client, dataroom):
+        url = f'/api/v1/datarooms/{dataroom.id}/'
+        response = api_client.patch(url, {
+            "show_file_index": False,
+        }, format="json")
+
+        assert response.status_code == status.HTTP_200_OK
+        dataroom.refresh_from_db()
+        assert dataroom.show_file_index is False
+
 
 
 class TestDataroomFolderViewSet:
@@ -2283,132 +2272,6 @@ class TestDataroomBannerGalleryAndBrandingViews:
         response = api_client.patch(url, {"brand_logo_override": logo_file}, format="multipart")
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "brand_logo_override" in response.data
-
-    def test_banner_images_crud_and_max_limit(self, api_client, dataroom, user2):
-        from datarooms.models import DataroomBannerImage
-
-        list_create_url = f'/api/v1/datarooms/{dataroom.id}/banner-images/'
-
-        # 1. List initially empty
-        res = api_client.get(list_create_url)
-        assert res.status_code == status.HTTP_200_OK
-        assert res.data == []
-
-        # 2. Add first banner image
-        img_file1 = SimpleUploadedFile("b1.png", _make_test_png(), content_type="image/png")
-        res1 = api_client.post(list_create_url, {"image": img_file1, "caption": "Banner 1"}, format="multipart")
-        assert res1.status_code == status.HTTP_201_CREATED
-        assert res1.data["caption"] == "Banner 1"
-        assert res1.data["position"] == 0
-        banner1_id = res1.data["id"]
-
-        # 3. Add second banner image (position automatically increments to 1)
-        img_file2 = SimpleUploadedFile("b2.png", _make_test_png(), content_type="image/png")
-        res2 = api_client.post(list_create_url, {"image": img_file2, "caption": "Banner 2"}, format="multipart")
-        assert res2.status_code == status.HTTP_201_CREATED
-        assert res2.data["position"] == 1
-        banner2_id = res2.data["id"]
-
-        # 4. Collaborator forbidden from uploading
-        from datarooms.models import DataroomCollaborator
-        DataroomCollaborator.objects.create(dataroom=dataroom, user=user2, role=DataroomCollaborator.ROLE_COLLABORATOR)
-        api_client.force_authenticate(user=user2)
-        img_fail = SimpleUploadedFile("fail.png", _make_test_png(), content_type="image/png")
-        res_fail = api_client.post(list_create_url, {"image": img_fail}, format="multipart")
-        assert res_fail.status_code == status.HTTP_403_FORBIDDEN
-
-        # Switch back to owner
-        api_client.force_authenticate(user=dataroom.created_by)
-
-        # 5. Update banner image (PATCH)
-        detail_url1 = f'/api/v1/datarooms/{dataroom.id}/banner-images/{banner1_id}/'
-        patch_res = api_client.patch(detail_url1, {"caption": "Updated Banner 1"}, format="json")
-        assert patch_res.status_code == status.HTTP_200_OK
-        assert patch_res.data["caption"] == "Updated Banner 1"
-
-        # 6. Delete banner image (DELETE)
-        del_res = api_client.delete(detail_url1)
-        assert del_res.status_code == status.HTTP_204_NO_CONTENT
-        assert not DataroomBannerImage.objects.filter(id=banner1_id).exists()
-
-        # 7. Test max limit of 10 banner images
-        # Currently 1 banner exists (banner2). Add 9 more to reach 10.
-        for i in range(3, 12):
-            img = SimpleUploadedFile(f"b{i}.png", _make_test_png(), content_type="image/png")
-            r = api_client.post(list_create_url, {"image": img, "caption": f"Banner {i}"}, format="multipart")
-            assert r.status_code == status.HTTP_201_CREATED
-
-        assert DataroomBannerImage.objects.filter(dataroom=dataroom).count() == 10
-
-        # Attempting to add an 11th image must fail with 400 Bad Request
-        img_11 = SimpleUploadedFile("b11.png", _make_test_png(), content_type="image/png")
-        r_overflow = api_client.post(list_create_url, {"image": img_11}, format="multipart")
-        assert r_overflow.status_code == status.HTTP_400_BAD_REQUEST
-        assert "Maximum of 10 banner images allowed" in r_overflow.data["detail"]
-
-    def test_reorder_banner_images(self, api_client, dataroom):
-        from datarooms.models import DataroomBannerImage
-
-        list_create_url = f'/api/v1/datarooms/{dataroom.id}/banner-images/'
-        reorder_url = f'/api/v1/datarooms/{dataroom.id}/banner-images/reorder/'
-
-        # Create 3 images
-        ids = []
-        for i in range(3):
-            img = SimpleUploadedFile(f"b{i}.png", _make_test_png(), content_type="image/png")
-            r = api_client.post(list_create_url, {"image": img, "caption": f"Img {i}"}, format="multipart")
-            assert r.status_code == status.HTTP_201_CREATED
-            ids.append(r.data["id"])
-
-        # Reorder them: reverse order [ids[2] -> 0, ids[1] -> 1, ids[0] -> 2]
-        payload = [
-            {"id": ids[2], "position": 0},
-            {"id": ids[1], "position": 1},
-            {"id": ids[0], "position": 2},
-        ]
-        reorder_res = api_client.post(reorder_url, payload, format="json")
-        assert reorder_res.status_code == status.HTTP_200_OK
-        reordered_data = reorder_res.data
-        assert [item["id"] for item in reordered_data] == [ids[2], ids[1], ids[0]]
-        assert [item["position"] for item in reordered_data] == [0, 1, 2]
-
-        # Reorder with dict { "items": [...] } format also works
-        payload_dict = {
-            "items": [
-                {"id": ids[0], "position": 0},
-                {"id": ids[1], "position": 1},
-                {"id": ids[2], "position": 2},
-            ]
-        }
-        reorder_dict_res = api_client.post(reorder_url, payload_dict, format="json")
-        assert reorder_dict_res.status_code == status.HTTP_200_OK
-
-        # Reorder with non-existent banner ID returns 400
-        invalid_payload = [{"id": "01NONEXISTENTID", "position": 0}]
-        invalid_res = api_client.post(reorder_url, invalid_payload, format="json")
-        assert invalid_res.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_reorder_banner_images_rejects_duplicate_ids_and_positions(self, api_client, dataroom):
-        list_create_url = f'/api/v1/datarooms/{dataroom.id}/banner-images/'
-        reorder_url = f'/api/v1/datarooms/{dataroom.id}/banner-images/reorder/'
-
-        img1 = SimpleUploadedFile("b1.png", _make_test_png(), content_type="image/png")
-        img2 = SimpleUploadedFile("b2.png", _make_test_png(), content_type="image/png")
-        r1 = api_client.post(list_create_url, {"image": img1}, format="multipart")
-        r2 = api_client.post(list_create_url, {"image": img2}, format="multipart")
-        id1, id2 = r1.data["id"], r2.data["id"]
-
-        # Duplicate ID
-        dup_id_payload = [{"id": id1, "position": 0}, {"id": id1, "position": 1}]
-        res_dup_id = api_client.post(reorder_url, dup_id_payload, format="json")
-        assert res_dup_id.status_code == status.HTTP_400_BAD_REQUEST
-        assert "Duplicate banner image id" in res_dup_id.data["detail"]
-
-        # Duplicate Position
-        dup_pos_payload = [{"id": id1, "position": 0}, {"id": id2, "position": 0}]
-        res_dup_pos = api_client.post(reorder_url, dup_pos_payload, format="json")
-        assert res_dup_pos.status_code == status.HTTP_400_BAD_REQUEST
-        assert "Duplicate position" in res_dup_pos.data["detail"]
 
 
 @pytest.mark.django_db

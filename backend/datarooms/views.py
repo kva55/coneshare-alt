@@ -30,7 +30,6 @@ from sharelinks.models import DataroomVisit, ViewSession
 from sharelinks.serializers import ViewSessionSerializer
 from .models import (
     Dataroom,
-    DataroomBannerImage,
     DataroomCollaborator,
     DataroomDocument,
     DataroomFolder,
@@ -59,8 +58,6 @@ from .serializers import (
     MoveDataroomContentSerializer, RemoveContentSerializer,
     ReorderDataroomItemsSerializer, EnsureDataroomFolderPathsSerializer,
     DataroomUploadRequestSerializer, DataroomUploadFinalizeSerializer,
-    DataroomBannerImageSerializer, DataroomBannerImageReorderItemSerializer,
-    MAX_BANNER_IMAGES_PER_DATAROOM,
 )
 
 
@@ -1042,128 +1039,6 @@ class DataroomViewSet(viewsets.ModelViewSet):
 
         serializer = DataroomCollaboratorUserSerializer(users_qs[:50], many=True, context=self.get_serializer_context())
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-    @action(detail=True, methods=['get', 'post'], url_path='banner-images')
-    def banner_images(self, request, pk=None):
-        dataroom = self.get_object()
-        if request.method.lower() == 'get':
-            if not is_dataroom_collaborator_or_above(request.user, dataroom):
-                raise PermissionDenied("You do not have permission to view banner images for this dataroom.")
-            images = dataroom.banner_images.all().order_by('position', 'created_at')
-            serializer = DataroomBannerImageSerializer(images, many=True, context=self.get_serializer_context())
-            return Response(serializer.data, status=status.HTTP_200_OK)
-
-        # POST: upload banner image
-        if not is_dataroom_owner_or_admin(request.user, dataroom):
-            raise PermissionDenied("Only the dataroom owner or an organization admin can add banner images.")
-
-        serializer = DataroomBannerImageSerializer(data=request.data, context=self.get_serializer_context())
-        serializer.is_valid(raise_exception=True)
-
-        with transaction.atomic():
-            locked_dataroom = Dataroom.objects.select_for_update().get(id=dataroom.id)
-            if locked_dataroom.banner_images.count() >= MAX_BANNER_IMAGES_PER_DATAROOM:
-                return Response(
-                    {"detail": f"Maximum of {MAX_BANNER_IMAGES_PER_DATAROOM} banner images allowed per dataroom."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            position = serializer.validated_data.get('position')
-            if 'position' not in request.data or position is None:
-                max_pos = locked_dataroom.banner_images.order_by('-position').values_list('position', flat=True).first()
-                position = (max_pos + 1) if max_pos is not None else 0
-
-            instance = serializer.save(dataroom=locked_dataroom, position=position)
-
-        return Response(
-            DataroomBannerImageSerializer(instance, context=self.get_serializer_context()).data,
-            status=status.HTTP_201_CREATED
-        )
-
-    @action(detail=True, methods=['post'], url_path='banner-images/reorder')
-    def reorder_banner_images(self, request, pk=None):
-        dataroom = self.get_object()
-        if not is_dataroom_owner_or_admin(request.user, dataroom):
-            raise PermissionDenied("Only the dataroom owner or an organization admin can reorder banner images.")
-
-        items_data = request.data
-        if isinstance(items_data, dict) and 'items' in items_data:
-            items_data = items_data['items']
-
-        if not isinstance(items_data, list):
-            return Response(
-                {"detail": "Request body must be a list of {id, position} items or an object with an 'items' list."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        serializer = DataroomBannerImageReorderItemSerializer(data=items_data, many=True)
-        serializer.is_valid(raise_exception=True)
-
-        existing_images = {str(img.id): img for img in dataroom.banner_images.all()}
-        seen_ids = set()
-        seen_positions = set()
-        for item in serializer.validated_data:
-            item_id = str(item['id'])
-            pos = item['position']
-            if item_id in seen_ids:
-                return Response(
-                    {"detail": f"Duplicate banner image id '{item_id}' in reorder payload."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            seen_ids.add(item_id)
-            if pos in seen_positions:
-                return Response(
-                    {"detail": f"Duplicate position '{pos}' in reorder payload."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            seen_positions.add(pos)
-            if item_id not in existing_images:
-                return Response(
-                    {"detail": f"Banner image with id '{item_id}' not found in this dataroom."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        with transaction.atomic():
-            for item in serializer.validated_data:
-                img = existing_images[str(item['id'])]
-                img.position = item['position']
-                img.save(update_fields=['position', 'updated_at'])
-
-        images = dataroom.banner_images.all().order_by('position', 'created_at')
-        return Response(
-            DataroomBannerImageSerializer(images, many=True, context=self.get_serializer_context()).data,
-            status=status.HTTP_200_OK
-        )
-
-    @action(detail=True, methods=['patch', 'delete'], url_path=r'banner-images/(?P<banner_id>(?!reorder/|reorder$)[^/.]+)')
-    def banner_image_detail(self, request, pk=None, banner_id=None):
-        dataroom = self.get_object()
-        if not is_dataroom_owner_or_admin(request.user, dataroom):
-            raise PermissionDenied("Only the dataroom owner or an organization admin can modify banner images.")
-
-        banner_image = dataroom.banner_images.filter(id=banner_id).first()
-        if not banner_image:
-            return Response(
-                {"detail": "Banner image not found in this dataroom."},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        if request.method.lower() == 'delete':
-            if banner_image.image:
-                banner_image.image.delete(save=False)
-            banner_image.delete()
-            return Response(status=status.HTTP_204_NO_CONTENT)
-
-        # PATCH
-        serializer = DataroomBannerImageSerializer(
-            banner_image, data=request.data, partial=True, context=self.get_serializer_context()
-        )
-        serializer.is_valid(raise_exception=True)
-        updated_instance = serializer.save()
-        return Response(
-            DataroomBannerImageSerializer(updated_instance, context=self.get_serializer_context()).data,
-            status=status.HTTP_200_OK
-        )
 
 
 class DataroomDocumentViewSet(mixins.RetrieveModelMixin,

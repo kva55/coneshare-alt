@@ -5,7 +5,7 @@ from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from sharelinks.models import ShareLink
-from datarooms.models import DataroomDocument, DataroomFolder, DataroomItemOrder, DataroomBannerImage
+from datarooms.models import DataroomDocument, DataroomFolder, DataroomItemOrder
 from datarooms.serializers import (
     AddContentSerializer,
     DataroomDetailSerializer,
@@ -18,8 +18,6 @@ from datarooms.serializers import (
     EnsureDataroomFolderPathsSerializer,
     DataroomUploadRequestSerializer,
     DataroomUploadFinalizeSerializer,
-    DataroomBannerImageSerializer,
-    DataroomBannerImageReorderItemSerializer,
 )
 
 pytestmark = pytest.mark.django_db
@@ -35,16 +33,6 @@ def serializer_context(user):
 
 
 class TestDataroomSerializer:
-    def test_dataroom_serializer(self, dataroom, serializer_context):
-        serializer = DataroomSerializer(instance=dataroom, context=serializer_context)
-        data = serializer.data
-        assert data["id"] == str(dataroom.id)
-        assert data["name"] == dataroom.name
-        assert data["created_by"] == str(dataroom.created_by.id)
-        assert "show_file_index" in data
-        assert "brand_primary_color" in data
-        assert "brand_secondary_color" in data
-        assert "brand_accent_color" in data
 
     def test_dataroom_detail_serializer(
         self, dataroom, document, serializer_context
@@ -89,15 +77,6 @@ class TestDataroomSerializer:
         assert detail_data["storage_used_bytes"] == 50 * 1024 * 1024
         assert summary_data["storage_used_bytes"] == 50 * 1024 * 1024
 
-    def test_dataroom_serializer_validates_hex_colors(self, dataroom, serializer_context):
-        serializer = DataroomSerializer(
-            instance=dataroom,
-            data={"brand_primary_color": "not-a-color"},
-            partial=True,
-            context=serializer_context,
-        )
-        assert not serializer.is_valid()
-        assert "brand_primary_color" in serializer.errors
 
     @override_settings(SITE_DOMAIN="http://test.coneshare.com")
     def test_dataroom_serializer_builds_branding_banner_url_from_site_domain(self, dataroom, serializer_context):
@@ -199,6 +178,14 @@ class TestDataroomSerializer:
         assert data["items"][1]["type"] == "folder"
         assert data["items"][1]["id"] == str(folder.id)
         assert data["items"][1]["position"] == 1
+
+    def test_dataroom_serializer(self, dataroom, serializer_context):
+        serializer = DataroomSerializer(instance=dataroom, context=serializer_context)
+        data = serializer.data
+        assert data["id"] == str(dataroom.id)
+        assert data["name"] == dataroom.name
+        assert data["created_by"] == str(dataroom.created_by.id)
+        assert "show_file_index" in data
 
 
 class TestDataroomFolderSerializer:
@@ -643,85 +630,4 @@ class TestDataroomBrandingSerializers:
         )
         with pytest.raises(PermissionDenied):
             serializer.is_valid(raise_exception=True)
-
-    def test_dataroom_detail_serializer_includes_banner_images(self, dataroom, serializer_context):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-        img1 = SimpleUploadedFile("banner1.png", _make_test_image_bytes(color="red"), content_type="image/png")
-        img2 = SimpleUploadedFile("banner2.png", _make_test_image_bytes(color="blue"), content_type="image/png")
-        DataroomBannerImage.objects.create(dataroom=dataroom, image=img1, caption="First", position=1)
-        DataroomBannerImage.objects.create(dataroom=dataroom, image=img2, caption="Zero", position=0)
-
-        detail_serializer = DataroomDetailSerializer(instance=dataroom, context=serializer_context)
-        data = detail_serializer.data
-
-        assert "banner_images" in data
-        assert len(data["banner_images"]) == 2
-        # Ordered by position
-        assert data["banner_images"][0]["caption"] == "Zero"
-        assert data["banner_images"][0]["position"] == 0
-        assert data["banner_images"][1]["caption"] == "First"
-        assert data["banner_images"][1]["position"] == 1
-
-
-class TestDataroomBannerImageSerializers:
-    def test_banner_image_serializer_validates_size(self, dataroom):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-        from PIL import Image
-        from io import BytesIO
-
-        buf = BytesIO()
-        Image.new('RGB', (10, 10), color='blue').save(buf, format='JPEG')
-        huge_data = buf.getvalue() + (b"0" * (6 * 1024 * 1024))
-        huge_file = SimpleUploadedFile("huge.jpg", huge_data, content_type="image/jpeg")
-        serializer = DataroomBannerImageSerializer(data={"image": huge_file, "caption": "Huge"})
-        assert not serializer.is_valid()
-        assert "image" in serializer.errors
-        assert "cannot exceed 5 MB" in str(serializer.errors["image"])
-
-    def test_banner_image_serializer_rejects_corrupted_file(self, dataroom):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-        fake_file = SimpleUploadedFile("banner.png", b"not-a-valid-image", content_type="image/png")
-        serializer = DataroomBannerImageSerializer(data={"image": fake_file, "caption": "Bad"})
-        assert not serializer.is_valid()
-        assert "image" in serializer.errors
-        assert "valid image" in str(serializer.errors["image"]).lower()
-
-    def test_banner_image_serializer_accepts_valid_image(self, dataroom):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-        valid_file = SimpleUploadedFile("banner.png", _make_test_image_bytes(), content_type="image/png")
-        serializer = DataroomBannerImageSerializer(data={"image": valid_file, "caption": "Good"})
-        assert serializer.is_valid(), serializer.errors
-
-    def test_banner_image_serializer_validates_position_bounds(self, dataroom):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-        valid_file = SimpleUploadedFile("banner.png", _make_test_image_bytes(), content_type="image/png")
-
-        # Negative position invalid
-        serializer_neg = DataroomBannerImageSerializer(
-            data={"image": valid_file, "position": -1}
-        )
-        assert not serializer_neg.is_valid()
-        assert "position" in serializer_neg.errors
-
-        # Exceeds max position 1000
-        serializer_overflow = DataroomBannerImageSerializer(
-            data={"image": valid_file, "position": 1001}
-        )
-        assert not serializer_overflow.is_valid()
-        assert "position" in serializer_overflow.errors
-
-    def test_banner_image_reorder_item_serializer(self):
-        # Valid
-        serializer = DataroomBannerImageReorderItemSerializer(data={"id": "01JABCDEF", "position": 0})
-        assert serializer.is_valid()
-
-        # Negative position invalid
-        serializer_neg = DataroomBannerImageReorderItemSerializer(data={"id": "01JABCDEF", "position": -1})
-        assert not serializer_neg.is_valid()
-        assert "position" in serializer_neg.errors
-
-        # Exceeds max position 1000 invalid
-        serializer_max = DataroomBannerImageReorderItemSerializer(data={"id": "01JABCDEF", "position": 1001})
-        assert not serializer_max.is_valid()
-        assert "position" in serializer_max.errors
 

@@ -358,17 +358,6 @@ def _resolve_dataroom_brand_logo_url(dataroom, org) -> str | None:
 def _build_dataroom_branding_payload(dataroom, org=None) -> dict:
     if not dataroom:
         return {}
-    banner_images = []
-    if dataroom.banner_mode == 'gallery':
-        banner_images = [
-            {
-                'id': str(img.id),
-                'image': urljoin(settings.SITE_DOMAIN, img.image.url) if img.image else None,
-                'caption': img.caption,
-                'position': img.position,
-            }
-            for img in dataroom.banner_images.all().order_by('position', 'created_at')
-        ]
     brand_logo_override_url = (
         urljoin(settings.SITE_DOMAIN, dataroom.brand_logo_override.url)
         if (dataroom.logo_mode in ('dataroom', 'override') and dataroom.brand_logo_override)
@@ -380,13 +369,9 @@ def _build_dataroom_branding_payload(dataroom, org=None) -> dict:
     return {
         'branding_banner': branding_banner_url,
         'banner_mode': dataroom.banner_mode,
-        'banner_images': banner_images,
         'logo_mode': dataroom.logo_mode,
         'brand_logo_override': brand_logo_override_url,
         'resolved_brand_logo_url': resolved_brand_logo_url,
-        'brand_primary_color': dataroom.brand_primary_color,
-        'brand_secondary_color': dataroom.brand_secondary_color,
-        'brand_accent_color': dataroom.brand_accent_color,
     }
 
 

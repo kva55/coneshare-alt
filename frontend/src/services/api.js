@@ -588,9 +588,6 @@ export const updateDataroomBranding = (id, {
   logoMode,
   brandLogoOverrideFile,
   removeBrandLogoOverride = false,
-  brandPrimaryColor,
-  brandSecondaryColor,
-  brandAccentColor,
   showFileIndex,
   enableQna,
   storageQuotaMb,
@@ -613,15 +610,6 @@ export const updateDataroomBranding = (id, {
     formData.append('brand_logo_override', brandLogoOverrideFile);
   }
   formData.append('remove_brand_logo_override', removeBrandLogoOverride ? 'true' : 'false');
-  if (brandPrimaryColor !== undefined) {
-    formData.append('brand_primary_color', brandPrimaryColor || '');
-  }
-  if (brandSecondaryColor !== undefined) {
-    formData.append('brand_secondary_color', brandSecondaryColor || '');
-  }
-  if (brandAccentColor !== undefined) {
-    formData.append('brand_accent_color', brandAccentColor || '');
-  }
   if (showFileIndex !== undefined) {
     formData.append('show_file_index', showFileIndex ? 'true' : 'false');
   }
@@ -635,26 +623,6 @@ export const updateDataroomBranding = (id, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
 };
-export const getDataroomBannerImages = (dataroomId) => api.get(`/datarooms/${dataroomId}/banner-images/`);
-export const createDataroomBannerImage = (dataroomId, { image, caption, position }) => {
-  const formData = new FormData();
-  formData.append('image', image);
-  if (caption !== undefined && caption !== null) {
-    formData.append('caption', caption);
-  }
-  if (position !== undefined && position !== null) {
-    formData.append('position', position);
-  }
-  return api.post(`/datarooms/${dataroomId}/banner-images/`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
-};
-export const updateDataroomBannerImage = (dataroomId, bannerId, data) =>
-  api.patch(`/datarooms/${dataroomId}/banner-images/${bannerId}/`, data);
-export const deleteDataroomBannerImage = (dataroomId, bannerId) =>
-  api.delete(`/datarooms/${dataroomId}/banner-images/${bannerId}/`);
-export const reorderDataroomBannerImages = (dataroomId, items) =>
-  api.post(`/datarooms/${dataroomId}/banner-images/reorder/`, items);
 export const deleteDataroom = (id) => api.delete(`/datarooms/${id}/`);
 export const addContentToDataroom = (id, data) => api.post(`/datarooms/${id}/add-content/`, data);
 export const removeContentFromDataroom = (id, data) => api.post(`/datarooms/${id}/remove-content/`, data);

@@ -52,7 +52,6 @@
     "src/tests/components/viewer/DocumentViewerHeader.test.jsx",
     "src/tests/components/documents/PreviewStatePanel.test.jsx",
     "src/tests/components/viewer/DataroomBannerGallery.test.jsx",
-    "src/tests/components/datarooms/DataroomBannerGalleryManager.test.jsx",
     "src/tests/components/viewer/DataroomFolderGrid.test.jsx",
     "src/tests/components/viewer/DataroomDocumentCard.test.jsx",
     "src/tests/components/viewer/DataroomDefaultHeroBanner.test.jsx",

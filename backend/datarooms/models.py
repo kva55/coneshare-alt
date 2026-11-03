@@ -10,12 +10,10 @@ DROOM_ITEM_TYPE_FOLDER = "folder"
 DROOM_ITEM_TYPE_DOCUMENT = "document"
 
 BANNER_MODE_SINGLE = 'single'
-BANNER_MODE_GALLERY = 'gallery'
 BANNER_MODE_NONE = 'none'
 
 BANNER_MODE_CHOICES = (
     (BANNER_MODE_SINGLE, 'Single banner image'),
-    (BANNER_MODE_GALLERY, 'Banner gallery'),
     (BANNER_MODE_NONE, 'No banner'),
 )
 
@@ -42,6 +40,7 @@ def dataroom_branding_logo_path(instance, filename):
 
 
 def dataroom_gallery_image_path(instance, filename):
+    # Kept only because historical migrations reference it (banner gallery was removed).
     _, extension = os.path.splitext(filename)
     ext = extension or ".png"
     return f"dataroom-branding/{instance.dataroom.organization_id}/{instance.dataroom_id}/gallery/{instance.id}{ext}"
@@ -73,9 +72,6 @@ class Dataroom(BaseModel):
         default=LOGO_MODE_ORG,
         help_text="Logo surface rendering mode"
     )
-    brand_primary_color = models.CharField(max_length=9, null=True, blank=True)
-    brand_secondary_color = models.CharField(max_length=9, null=True, blank=True)
-    brand_accent_color = models.CharField(max_length=9, null=True, blank=True)
     storage_quota_mb = models.IntegerField(default=0, help_text="Max storage capacity for this dataroom in MB. 0 means unlimited.")
     vault_folder = models.OneToOneField(
         'documents.Folder',
@@ -88,21 +84,6 @@ class Dataroom(BaseModel):
     def __str__(self):
         return self.name
 
-
-class DataroomBannerImage(BaseModel):
-    dataroom = models.ForeignKey(Dataroom, on_delete=models.CASCADE, related_name='banner_images')
-    image = models.ImageField(upload_to=dataroom_gallery_image_path)
-    caption = models.CharField(max_length=255, blank=True, default="")
-    position = models.PositiveIntegerField(default=0, db_index=True)
-
-    class Meta:
-        ordering = ['position', 'created_at']
-        indexes = [
-            models.Index(fields=['dataroom', 'position']),
-        ]
-
-    def __str__(self):
-        return f"{self.dataroom_id} banner image #{self.position}"
 
 
 class DataroomFolder(BaseModel):

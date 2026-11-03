@@ -15,7 +15,6 @@ from rest_framework.exceptions import PermissionDenied
 from core.models import User
 from .models import (
     Dataroom,
-    DataroomBannerImage,
     DataroomCollaborator,
     DataroomDocument,
     DataroomFolder,
@@ -30,63 +29,6 @@ HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 MAX_STORAGE_QUOTA_MB = 1048576  # 1 TB (1,048,576 MB)
 MAX_BANNER_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_BRAND_LOGO_SIZE_BYTES = 2 * 1024 * 1024    # 2 MB
-MAX_BANNER_IMAGES_PER_DATAROOM = 10
-
-
-class DataroomBannerImageSerializer(serializers.ModelSerializer):
-    image_url = serializers.SerializerMethodField()
-    position = serializers.IntegerField(min_value=0, max_value=1000, required=False)
-
-    class Meta:
-        model = DataroomBannerImage
-        fields = [
-            'id', 'dataroom', 'image', 'image_url', 'caption', 'position',
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'dataroom', 'image_url', 'created_at', 'updated_at']
-
-    @extend_schema_field(serializers.URLField(allow_null=True))
-    def get_image_url(self, obj) -> str:
-        if not obj.image:
-            return None
-        return urljoin(settings.SITE_DOMAIN, obj.image.url)
-
-    def validate_image(self, value):
-        if not value:
-            return value
-        if hasattr(value, 'size') and value.size > MAX_BANNER_IMAGE_SIZE_BYTES:
-            raise serializers.ValidationError("Banner image file size cannot exceed 5 MB.")
-        try:
-            if hasattr(value, 'seek'):
-                value.seek(0)
-            img = Image.open(value)
-            img.verify()
-            if img.format not in ('PNG', 'JPEG', 'WEBP'):
-                raise serializers.ValidationError(
-                    f"Unsupported image format '{img.format}'. Allowed formats are PNG, JPEG, WEBP."
-                )
-            if hasattr(value, 'seek'):
-                value.seek(0)
-        except serializers.ValidationError:
-            raise
-        except Exception:
-            raise serializers.ValidationError("Uploaded file is not a valid image.")
-        return value
-
-    def validate_position(self, value):
-        if value is not None and (value < 0 or value > 1000):
-            raise serializers.ValidationError("Position must be between 0 and 1000.")
-        return value
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        data['image'] = self.get_image_url(instance)
-        return data
-
-
-class DataroomBannerImageReorderItemSerializer(serializers.Serializer):
-    id = serializers.CharField(required=True)
-    position = serializers.IntegerField(min_value=0, max_value=1000, required=True)
 
 
 
@@ -161,23 +103,6 @@ class DataroomSerializer(serializers.ModelSerializer):
             return None
         return urljoin(settings.SITE_DOMAIN, obj.brand_logo_override.url)
 
-    def _validate_hex_color(self, value, field_name):
-        if value in (None, ""):
-            return value
-        if not HEX_COLOR_RE.match(value):
-            raise serializers.ValidationError(
-                {field_name: "Must be a valid hex color in #RRGGBB or #RRGGBBAA format."}
-            )
-        return value
-
-    def validate_brand_primary_color(self, value):
-        return self._validate_hex_color(value, "brand_primary_color")
-
-    def validate_brand_secondary_color(self, value):
-        return self._validate_hex_color(value, "brand_secondary_color")
-
-    def validate_brand_accent_color(self, value):
-        return self._validate_hex_color(value, "brand_accent_color")
 
     def validate_brand_logo_override(self, value):
         if not value:
@@ -244,7 +169,6 @@ class DataroomSerializer(serializers.ModelSerializer):
             if not is_dataroom_owner_or_admin(request.user, self.instance):
                 branding_fields = {
                     'branding_banner', 'remove_branding_banner',
-                    'brand_primary_color', 'brand_secondary_color', 'brand_accent_color',
                     'banner_mode', 'logo_mode', 'brand_logo_override', 'remove_brand_logo_override'
                 }
                 changed_branding = set(attrs.keys()) & branding_fields
@@ -306,7 +230,7 @@ class DataroomSerializer(serializers.ModelSerializer):
             'storage_quota_mb', 'storage_used_bytes',
             'show_file_index',
             'enable_qna',
-            'branding_banner', 'brand_primary_color', 'brand_secondary_color', 'brand_accent_color',
+            'branding_banner',
             'remove_branding_banner',
             'banner_mode', 'logo_mode', 'brand_logo_override', 'remove_brand_logo_override',
         ]
@@ -476,7 +400,6 @@ class DataroomDetailSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
     branding_banner = serializers.SerializerMethodField()
     brand_logo_override = serializers.SerializerMethodField()
-    banner_images = serializers.SerializerMethodField()
     owner = serializers.SerializerMethodField()
     current_user_role = serializers.SerializerMethodField()
     collaborator_count = serializers.SerializerMethodField()
@@ -495,9 +418,8 @@ class DataroomDetailSerializer(serializers.ModelSerializer):
             'storage_quota_mb', 'storage_used_bytes',
             'show_file_index',
             'enable_qna',
-            'branding_banner', 'banner_mode', 'banner_images',
+            'branding_banner', 'banner_mode',
             'brand_logo_override', 'logo_mode',
-            'brand_primary_color', 'brand_secondary_color', 'brand_accent_color',
             'items'
         ]
         read_only_fields = fields
@@ -543,10 +465,6 @@ class DataroomDetailSerializer(serializers.ModelSerializer):
             return None
         return urljoin(settings.SITE_DOMAIN, obj.brand_logo_override.url)
 
-    @extend_schema_field(DataroomBannerImageSerializer(many=True))
-    def get_banner_images(self, obj):
-        images = obj.banner_images.all().order_by('position', 'created_at')
-        return DataroomBannerImageSerializer(images, many=True, context=self.context).data
 
     @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_items(self, obj):

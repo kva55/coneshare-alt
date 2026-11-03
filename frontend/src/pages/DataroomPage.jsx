@@ -7,7 +7,7 @@ import { ShareIcon, Star, ArrowLeft, ChevronDown, FolderUp, Plus, Loader2, Crown
 import { toast } from 'sonner';
 import { formatBytes } from '../lib/formatters';
 import { isDataroomOwner, isDataroomCollaborator } from '../utils/formatters';
-import { getDataroom, addContentToDataroom, createDataroomFolder, moveDataroomContent, getDataroomFolderContents, getShareLinksForDataroom, deleteShareLink, getDataroomViewSessions, getDataroomStats, removeContentFromDataroom, updateDataroomFolder, updateDataroomDocument, updateDataroomBranding, reorderDataroomItems, deleteDataroom, ensureDataroomFolderPaths, uploadDataroomDocument, getDataroomBannerImages } from '../services/api';
+import { getDataroom, addContentToDataroom, createDataroomFolder, moveDataroomContent, getDataroomFolderContents, getShareLinksForDataroom, deleteShareLink, getDataroomViewSessions, getDataroomStats, removeContentFromDataroom, updateDataroomFolder, updateDataroomDocument, updateDataroomBranding, reorderDataroomItems, deleteDataroom, ensureDataroomFolderPaths, uploadDataroomDocument } from '../services/api';
 import { useBreadcrumb } from '../components/layout/BreadcrumbProvider';
 import { useUpload } from '../contexts/UploadProvider';
 import { useUser } from '../contexts/UserProvider';
@@ -30,7 +30,6 @@ import { ViewSessionsTable } from '../components/documents/ViewSessionsTable';
 import { ManagePermissionsDialog } from '../components/datarooms/ManagePermissionsDialog';
 import { CollaboratorsAvatarGroup } from '../components/datarooms/CollaboratorsAvatarGroup';
 import { TransferOwnershipDialog } from '../components/datarooms/TransferOwnershipDialog';
-import { DataroomBannerGalleryManager } from '../components/datarooms/DataroomBannerGalleryManager';
 import { DataroomBannerGallery } from '../components/viewer/DataroomBannerGallery';
 import { RenameItemDialog } from '../components/dialogs/RenameItemDialog';
 import { Skeleton } from '../components/ui/Skeleton';
@@ -47,15 +46,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/Dialog';
-
-const BRAND_PRESETS = [
-  { name: 'Default', primary: '#111827', secondary: '#4b5563', accent: '#1f2937' },
-  { name: 'Ocean', primary: '#0f4c81', secondary: '#2a6f9e', accent: '#0b3559' },
-  { name: 'Forest', primary: '#1f6f5f', secondary: '#3d8d7a', accent: '#174f44' },
-  { name: 'Sunset', primary: '#b45309', secondary: '#d97706', accent: '#7c2d12' },
-  { name: 'Rose', primary: '#9f1239', secondary: '#be185d', accent: '#881337' },
-  { name: 'Indigo', primary: '#3730a3', secondary: '#4f46e5', accent: '#312e81' },
-];
 
 const MAX_STORAGE_QUOTA_MB = 1048576; // 1 TB (1,048,576 MB)
 
@@ -101,11 +91,6 @@ export function DataroomPage() {
   const [itemToRemove, setItemToRemove] = useState(null);
   const [isTransferOwnershipOpen, setIsTransferOwnershipOpen] = useState(false);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
-  const [brandingForm, setBrandingForm] = useState({
-    brandPrimaryColor: '',
-    brandSecondaryColor: '',
-    brandAccentColor: '',
-  });
   const [brandingBannerFile, setBrandingBannerFile] = useState(null);
   const [removeBrandingBanner, setRemoveBrandingBanner] = useState(false);
   const [brandingPreviewUrl, setBrandingPreviewUrl] = useState(null);
@@ -117,12 +102,8 @@ export function DataroomPage() {
   const logoFileInputRef = useRef(null);
 
   const [bannerMode, setBannerMode] = useState('single');
-  const [galleryImages, setGalleryImages] = useState([]);
-  const [hasFetchedGallery, setHasFetchedGallery] = useState(false);
-  const [, setIsGalleryImagesLoading] = useState(false);
   const [isSavingGeneral, setIsSavingGeneral] = useState(false);
   const [isSavingBanner, setIsSavingBanner] = useState(false);
-  const [isSavingColors, setIsSavingColors] = useState(false);
   const [showFileIndex, setShowFileIndex] = useState(true);
   const [enableQna, setEnableQna] = useState(true);
   const [isSavingEnableQna, setIsSavingEnableQna] = useState(false);
@@ -426,37 +407,9 @@ export function DataroomPage() {
     }
   }, [dataroom, currentDataroomFolder, setBreadcrumbData, handleBreadcrumbNavigate]);
 
-  const fetchGalleryImages = useCallback(async () => {
-    setIsGalleryImagesLoading(true);
-    try {
-      const response = await getDataroomBannerImages(dataroomId);
-      setGalleryImages(response?.data || []);
-      setHasFetchedGallery(true);
-    } catch (error) {
-      console.error('Failed to load gallery images', error);
-    } finally {
-      setIsGalleryImagesLoading(false);
-    }
-  }, [dataroomId]);
-
-  useEffect(() => {
-    setHasFetchedGallery(false);
-  }, [dataroomId]);
-
-  useEffect(() => {
-    if (activeTab === 'settings') {
-      fetchGalleryImages();
-    }
-  }, [activeTab, fetchGalleryImages]);
-
   useEffect(() => {
     if (!dataroom) return;
     setDataroomName(dataroom.name || '');
-    setBrandingForm({
-      brandPrimaryColor: dataroom.brand_primary_color || '',
-      brandSecondaryColor: dataroom.brand_secondary_color || '',
-      brandAccentColor: dataroom.brand_accent_color || '',
-    });
     setBrandingBannerFile(null);
     setRemoveBrandingBanner(false);
     setBrandingPreviewUrl(null);
@@ -466,13 +419,10 @@ export function DataroomPage() {
     setRemoveBrandLogoOverride(false);
     setBrandLogoPreviewUrl(null);
     setBannerMode(dataroom.banner_mode || dataroom.bannerMode || 'single');
-    if (!hasFetchedGallery && dataroom.banner_images && Array.isArray(dataroom.banner_images)) {
-      setGalleryImages(dataroom.banner_images);
-    }
     setShowFileIndex(Boolean(dataroom.show_file_index));
     setEnableQna(dataroom.enable_qna !== false);
     setStorageQuotaMb(dataroom.storage_quota_mb ?? 0);
-  }, [dataroom, hasFetchedGallery]);
+  }, [dataroom]);
 
   useEffect(() => {
     if (!brandingBannerFile) {
@@ -749,9 +699,6 @@ export function DataroomPage() {
         setDataroom(response.data);
       }
       toast.success(t('datarooms.bannerUpdated', { defaultValue: 'Banner updated.' }));
-      if (newMode === 'gallery') {
-        fetchGalleryImages();
-      }
     } catch (error) {
       setBannerMode(oldMode);
     }
@@ -773,23 +720,6 @@ export function DataroomPage() {
       // Error toast handled by interceptor
     } finally {
       setIsSavingBanner(false);
-    }
-  };
-
-  const handleSaveColors = async () => {
-    setIsSavingColors(true);
-    try {
-      const response = await updateDataroomBranding(dataroomId, {
-        brandPrimaryColor: brandingForm.brandPrimaryColor,
-        brandSecondaryColor: brandingForm.brandSecondaryColor,
-        brandAccentColor: brandingForm.brandAccentColor,
-      });
-      setDataroom(response.data);
-      toast.success(t('datarooms.themeColorsUpdated'));
-    } catch (error) {
-      // Error toast handled by interceptor
-    } finally {
-      setIsSavingColors(false);
     }
   };
 
@@ -858,18 +788,6 @@ export function DataroomPage() {
     } catch (error) {
       // Error toast handled by interceptor
     }
-  };
-
-  const handleBrandColorChange = (field, value) => {
-    setBrandingForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleApplyPreset = (preset) => {
-    setBrandingForm({
-      brandPrimaryColor: preset.primary,
-      brandSecondaryColor: preset.secondary,
-      brandAccentColor: preset.accent,
-    });
   };
 
   const handleOpenDeleteDataroomDialog = () => {
@@ -962,14 +880,12 @@ export function DataroomPage() {
     : 0;
   const isQuotaDirty = isValidIntegerQuota && activeQuotaMb !== currentQuotaMb;
 
-  const effectiveBannerImages = hasFetchedGallery ? galleryImages : (dataroom?.banner_images || []);
-  const hasBanner = (bannerMode === 'single' && Boolean(dataroom?.branding_banner)) ||
-    (bannerMode === 'gallery' && effectiveBannerImages.length > 0);
+  const hasBanner = bannerMode === 'single' && Boolean(dataroom?.branding_banner);
 
   const dataroomThemeStyle = {
-    '--dataroom-primary': dataroom.brand_primary_color || '#111827',
-    '--dataroom-secondary': dataroom.brand_secondary_color || '#4b5563',
-    '--dataroom-accent': dataroom.brand_accent_color || '#1f2937',
+    '--dataroom-primary': '#111827',
+    '--dataroom-secondary': '#4b5563',
+    '--dataroom-accent': '#1f2937',
   };
 
   return (
@@ -1079,7 +995,7 @@ export function DataroomPage() {
       {hasBanner && (
         <div className="mb-6 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
           <DataroomBannerGallery
-            images={effectiveBannerImages}
+            images={[]}
             bannerMode={bannerMode}
             singleBannerUrl={dataroom?.branding_banner}
             dataroomName={dataroom?.name || ''}
@@ -1374,7 +1290,6 @@ export function DataroomPage() {
               <div className="flex flex-wrap gap-2 mb-4">
                 {[
                   { value: 'single', label: t('datarooms.bannerModeSingle') },
-                  { value: 'gallery', label: t('datarooms.bannerModeGallery') },
                   { value: 'none', label: t('datarooms.bannerModeNone') },
                 ].map((option) => {
                   const isSelected = bannerMode === option.value;
@@ -1466,17 +1381,6 @@ export function DataroomPage() {
                 </div>
               )}
 
-              {bannerMode === 'gallery' && (
-                <div className="mt-2">
-                  <DataroomBannerGalleryManager
-                    dataroomId={dataroomId}
-                    images={galleryImages}
-                    onImagesChange={fetchGalleryImages}
-                    canManage={canManage}
-                  />
-                </div>
-              )}
-
               {bannerMode === 'none' && (
                 <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
                   {t('datarooms.bannerHiddenNotice', {
@@ -1484,116 +1388,6 @@ export function DataroomPage() {
                   })}
                 </div>
               )}
-            </div>
-
-            <div className="pb-6 border-b border-gray-200 dark:border-gray-800">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold">{t('datarooms.brandCustomization')}</h3>
-                <Button size="sm" onClick={handleSaveColors} disabled={isSavingColors}>
-                  {isSavingColors ? t('common.saving') : t('common.save')}
-                </Button>
-              </div>
-              <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
-                {t('datarooms.brandColorsNotice')}
-              </p>
-              <div className="mb-4">
-                <Label>{t('datarooms.presetPalettes')}</Label>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {BRAND_PRESETS.map((preset) => (
-                    <button
-                      key={preset.name}
-                      type="button"
-                      className="flex items-center gap-2 rounded border border-gray-300 px-2 py-1 text-xs dark:border-gray-700"
-                      onClick={() => handleApplyPreset(preset)}
-                      title={`Apply ${preset.name}`}
-                    >
-                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: preset.primary }} />
-                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: preset.secondary }} />
-                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: preset.accent }} />
-                      <span>{preset.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <div>
-                  <Label htmlFor="brand-primary">{t('datarooms.primaryColor')}</Label>
-                  <Input
-                    id="brand-primary-picker"
-                    type="color"
-                    className="mb-2 h-10 p-1"
-                    value={brandingForm.brandPrimaryColor || '#111827'}
-                    onChange={(e) => handleBrandColorChange('brandPrimaryColor', e.target.value)}
-                  />
-                  <Input
-                    id="brand-primary"
-                    placeholder="#112233"
-                    value={brandingForm.brandPrimaryColor}
-                    onChange={(e) => handleBrandColorChange('brandPrimaryColor', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="brand-secondary">{t('datarooms.secondaryColor')}</Label>
-                  <Input
-                    id="brand-secondary-picker"
-                    type="color"
-                    className="mb-2 h-10 p-1"
-                    value={brandingForm.brandSecondaryColor || '#4b5563'}
-                    onChange={(e) => handleBrandColorChange('brandSecondaryColor', e.target.value)}
-                  />
-                  <Input
-                    id="brand-secondary"
-                    placeholder="#445566"
-                    value={brandingForm.brandSecondaryColor}
-                    onChange={(e) => handleBrandColorChange('brandSecondaryColor', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="brand-accent">{t('datarooms.accentColor')}</Label>
-                  <Input
-                    id="brand-accent-picker"
-                    type="color"
-                    className="mb-2 h-10 p-1"
-                    value={brandingForm.brandAccentColor || '#1f2937'}
-                    onChange={(e) => handleBrandColorChange('brandAccentColor', e.target.value)}
-                  />
-                  <Input
-                    id="brand-accent"
-                    placeholder="#778899AA"
-                    value={brandingForm.brandAccentColor}
-                    onChange={(e) => handleBrandColorChange('brandAccentColor', e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-6">
-                <Label>{t('datarooms.livePreview')}</Label>
-                <div className="mt-2 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
-                  <div
-                    className="px-4 py-3"
-                    style={{ backgroundColor: brandingForm.brandPrimaryColor || '#111827', color: '#ffffff' }}
-                  >
-                    {t('datarooms.previewHeader')}
-                  </div>
-                  <div className="p-4">
-                    <p style={{ color: brandingForm.brandSecondaryColor || '#4b5563' }}>
-                      {t('datarooms.secondaryTextPreview')}
-                    </p>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="mt-3"
-                      style={{
-                        backgroundColor: brandingForm.brandAccentColor || '#1f2937',
-                        color: '#ffffff',
-                      }}
-                    >
-                      {t('datarooms.accentButton')}
-                    </Button>
-                  </div>
-                </div>
-              </div>
             </div>
 
             <div className="pb-6 border-b border-gray-200 dark:border-gray-800 space-y-4">
