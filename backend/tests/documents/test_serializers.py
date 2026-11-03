@@ -181,63 +181,15 @@ class TestDocumentSerializer:
         with django_assert_num_queries(1):
             assert serializer.get_share_link_view_count(doc_from_db) == 1
 
-    @patch('documents.models.get_dynamic_setting')
-    def test_document_serializer_download_only_dynamic(self, mock_get_setting, user, organization, serializer_context):
-        def side_effect(key, default=None):
-            if key == 'MAX_PREVIEW_FILE_SIZE_MB':
-                return 100
-            if key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-                return 500
-            return default
-        mock_get_setting.side_effect = side_effect
-
-        doc = Document.objects.create(
-            organization=organization,
-            name="Video Doc.mp4",
-            type="video",
-            created_by=user,
-            file_size=600 * 1024 * 1024,  # 600MB
-            download_only=False,
-        )
-
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            serializer = DocumentSerializer(instance=doc, context=serializer_context)
-            # 600MB is over the 500MB limit, so download_only should be True
-            assert serializer.data['download_only'] is True
-
-        # Now raise limit to 1000MB (1GB)
-        def side_effect_large(key, default=None):
-            if key == 'MAX_PREVIEW_FILE_SIZE_MB':
-                return 100
-            if key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-                return 1000
-            return default
-        mock_get_setting.side_effect = side_effect_large
-
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            serializer = DocumentSerializer(instance=doc, context=serializer_context)
-            # 600MB is within the new 1000MB limit, so download_only should be False
-            assert serializer.data['download_only'] is False
-
 
 class TestDocumentVersionSerializers:
-    def test_version_serializers_cloud_import_exposed_metadata_hidden(self, user, organization):
+    def test_version_serializers_hide_metadata(self, user, organization):
         from documents.models import DocumentVersion
         doc = Document.objects.create(
             organization=organization,
             name="Version Test.pdf",
             created_by=user,
         )
-        metadata_val = {
-            "cloud_import": {
-                "connection_id": 12,
-                "file_id": "id:abcdef12345",
-                "file_name": "Test.pdf",
-                "file_path": "/photos/Test.pdf",
-                "provider": "dropbox",
-                "etag_or_rev": "015d30000000000000000",
-            }
-        }
         v1 = DocumentVersion.objects.create(
             document=doc,
             version_number=1,
@@ -247,26 +199,12 @@ class TestDocumentVersionSerializers:
             original_storage_key="v1.pdf",
             storage_key="v1.pdf",
             type="pdf",
-            metadata=metadata_val,
         )
 
         for serializer_class in [DocumentVersionSerializer, DocumentVersionListSerializer]:
-            serializer = serializer_class(instance=v1)
-            data = serializer.data
-            
-            # Assert metadata field itself is not present
+            data = serializer_class(instance=v1).data
             assert "metadata" not in data
-            
-            # Assert display-safe cloud_import field is present with only non-sensitive keys
-            assert "cloud_import" in data
-            ci = data["cloud_import"]
-            assert ci["provider"] == "dropbox"
-            assert ci["file_name"] == "Test.pdf"
-            assert ci["file_path"] == "/photos/Test.pdf"
-            
-            # Assert sensitive details are filtered out
-            assert "connection_id" not in ci
-            assert "etag_or_rev" not in ci
+            assert "cloud_import" not in data
 
 
 class TestDocumentSerializerReadOnlyFields:

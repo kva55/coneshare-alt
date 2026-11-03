@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../../utils/formatters';
-import { Eye, Upload, RefreshCw, Pencil } from 'lucide-react';
+import { Eye, Upload, Pencil } from 'lucide-react';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import {
@@ -24,14 +24,11 @@ export function DocumentHeader({
   onCreateLink,
   onPreview,
   onUploadNewVersion,
-  onImportVersionFromCloud,
-  onRefreshFromCloud,
   onDownload,
   onVersionHistory,
   onDelete,
   onRenameDocument,
   isProcessing,
-  cloudProviders = [],
   canManage = true,
 }) {
   const { t } = useTranslation();
@@ -121,35 +118,6 @@ export function DocumentHeader({
                 {t('documents.uploadedBy', { name: document.uploader_info.name, email: document.uploader_info.email })}
               </Badge>
             )}
-            {document.cloud_import && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>
-                    <Badge className="bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-900/20 dark:text-sky-400 dark:border-sky-850 cursor-help">
-                      ☁️ Imported from {document.cloud_import.provider_display}
-                    </Badge>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <div className="space-y-1.5 p-1 text-xs">
-                    <div className="font-semibold border-b border-gray-700/50 pb-1 mb-1">
-                      Cloud Import Details
-                    </div>
-                    <div>
-                      <span className="text-gray-400">Provider:</span> {document.cloud_import.provider_display}
-                    </div>
-                    <div>
-                      <span className="text-gray-400">Source Path:</span> <code className="bg-gray-800 dark:bg-gray-750 px-1 rounded break-all">{document.cloud_import.file_id || 'N/A'}</code>
-                    </div>
-                    {document.cloud_import.etag_or_rev && (
-                      <div>
-                        <span className="text-gray-400">Revision:</span> <code className="bg-gray-800 dark:bg-gray-750 px-1 rounded break-all">{document.cloud_import.etag_or_rev}</code>
-                      </div>
-                    )}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            )}
           </div>
         </div>
         <div className="mt-3 flex sm:ml-4 sm:mt-0">
@@ -178,28 +146,6 @@ export function DocumentHeader({
             </TooltipContent>
           </Tooltip>
 
-          {canManage && document.cloud_import && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="mr-2"
-                    onClick={onRefreshFromCloud}
-                    disabled={isProcessing}
-                  >
-                    <RefreshCw className={`h-5 w-5 ${isProcessing ? 'animate-spin' : ''}`} />
-                    <span className="sr-only">{t('documents.refreshFromCloud', { provider: document.cloud_import.provider_display })}</span>
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t('documents.refreshFromCloud', { provider: document.cloud_import.provider_display })}</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-
           {canManage && (
             <DropdownMenu>
               <Tooltip>
@@ -226,12 +172,6 @@ export function DocumentHeader({
                 <DropdownMenuItem onSelect={onUploadNewVersion}>
                   {t('documents.uploadFromComputer')}
                 </DropdownMenuItem>
-                {cloudProviders.length > 0 && <div className="my-1 h-px bg-gray-100 dark:bg-gray-800" />}
-                {cloudProviders.map((provider) => (
-                  <DropdownMenuItem key={provider.name} onSelect={() => onImportVersionFromCloud(provider)}>
-                    {t('documents.importFrom', { provider: provider.display_name })} {provider.is_connected ? '' : t('documents.connect')}
-                  </DropdownMenuItem>
-                ))}
               </DropdownMenuContent>
             </DropdownMenu>
           )}

@@ -3,7 +3,6 @@ from typing import List, Optional, TypedDict
 from django.db import models
 from django.db.models import Q
 from django.core.exceptions import ValidationError
-from django.conf import settings
 
 from core.models import BaseModel, Organization, User
 from core.services import get_dynamic_setting
@@ -192,40 +191,16 @@ class Document(BaseModel):
         Dynamically calculates whether the document can only be downloaded.
         Checks file type limits and enabled settings in real-time.
         """
-        # 1. Unsupported raw files
-        if self.type == 'file':
+        # 1. Non-PDF files are stored but never previewed
+        if self.type != 'pdf':
             return True
 
-        # 2. Videos
-        if self.type == 'video':
-            if not getattr(settings, 'ENABLE_VIDEO_PREVIEW', False):
-                return True
-            max_video_size = get_dynamic_setting('MAX_VIDEO_PREVIEW_SIZE_MB')
-            return bool(self.file_size and self.file_size > (max_video_size * 1024 * 1024))
+        # 2. PDF documents above the preview size limit
+        max_preview_size = get_dynamic_setting('MAX_PREVIEW_FILE_SIZE_MB')
+        if self.file_size and self.file_size > (max_preview_size * 1024 * 1024):
+            return True
 
-        # 3. Office Documents
-        if self.type == 'document':
-            if not getattr(settings, 'ENABLE_OFFICE_PREVIEW', False):
-                return True
-            max_preview_size = get_dynamic_setting('MAX_PREVIEW_FILE_SIZE_MB')
-            return bool(self.file_size and self.file_size > (max_preview_size * 1024 * 1024))
-
-        # 4. PDF Documents
-        if self.type == 'pdf':
-            max_preview_size = get_dynamic_setting('MAX_PREVIEW_FILE_SIZE_MB')
-            return bool(self.file_size and self.file_size > (max_preview_size * 1024 * 1024))
-
-        # 5. Spreadsheets
-        if self.type == 'spreadsheet':
-            max_preview_size = get_dynamic_setting('MAX_PREVIEW_FILE_SIZE_MB')
-            return bool(self.file_size and self.file_size > (max_preview_size * 1024 * 1024))
-
-        # 6. Markdown Documents
-        if self.type == 'markdown':
-            max_preview_size = get_dynamic_setting('MAX_PREVIEW_FILE_SIZE_MB')
-            return bool(self.file_size and self.file_size > (max_preview_size * 1024 * 1024))
-
-        # Fallback to the persisted DB column (e.g., images, manually overridden status)
+        # Fallback to the persisted DB column (manually overridden status)
         return self.download_only
 
     def save(self, *args, **kwargs):
@@ -240,37 +215,17 @@ class Document(BaseModel):
 
 def validate_document_version_metadata(value):
     """
-    Validates the keys and values inside the DocumentVersion metadata JSON field
-    to ensure schema integrity.
+    Validates the DocumentVersion metadata JSON field. No metadata keys are
+    currently defined; the field is kept for forward compatibility.
+    Referenced by migrations, so the function name must stay stable.
     """
     if not isinstance(value, dict):
         raise ValidationError("metadata must be a dictionary.")
 
-    allowed_keys = {'cloud_import'}
+    allowed_keys = set()
     invalid_keys = set(value.keys()) - allowed_keys
     if invalid_keys:
         raise ValidationError(f"Invalid keys in metadata: {', '.join(invalid_keys)}")
-
-    if 'cloud_import' in value:
-        cloud_import = value['cloud_import']
-        if not isinstance(cloud_import, dict):
-            raise ValidationError("metadata['cloud_import'] must be a dictionary.")
-
-        allowed_cloud_keys = {'provider', 'provider_display', 'connection_id', 'file_id', 'etag_or_rev'}
-        invalid_cloud_keys = set(cloud_import.keys()) - allowed_cloud_keys
-        if invalid_cloud_keys:
-            raise ValidationError(f"Invalid keys in metadata['cloud_import']: {', '.join(invalid_cloud_keys)}")
-
-        for key in ('provider', 'provider_display', 'connection_id', 'file_id'):
-            if key in cloud_import:
-                val = cloud_import[key]
-                if val is not None and not isinstance(val, (str, int)):
-                    raise ValidationError(f"Value for '{key}' in metadata['cloud_import'] must be a string or integer.")
-
-        if 'etag_or_rev' in cloud_import:
-            val = cloud_import['etag_or_rev']
-            if val is not None and not isinstance(val, str):
-                raise ValidationError("Value for 'etag_or_rev' in metadata['cloud_import'] must be a string.")
 
 
 class DocumentVersion(BaseModel):
@@ -314,16 +269,7 @@ class DocumentVersion(BaseModel):
     )
     render_error = models.TextField(blank=True, null=True)
 
-    # Expected schema for metadata:
-    # {
-    #     'cloud_import': {
-    #         'provider': str (optional),
-    #         'provider_display': str (optional),
-    #         'connection_id': str/int (optional),
-    #         'file_id': str (optional),
-    #         'etag_or_rev': str (optional)
-    #     }
-    # }
+    # No metadata keys are currently defined (see validate_document_version_metadata).
     metadata = models.JSONField(
         default=dict,
         blank=True,

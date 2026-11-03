@@ -58,8 +58,6 @@ describe('DocumentPage', () => {
     vi.resetAllMocks();
     await i18n.changeLanguage('en');
     mockCurrentUser = { id: 'u1', role: 'user' };
-    api.getCloudProviders.mockResolvedValue({ data: [] });
-    api.getCloudConnections.mockResolvedValue({ data: [] });
   });
 
   const mockDocument = { id: 'doc123', name: 'Test Doc', created_by: 'u1', share_links: [] };

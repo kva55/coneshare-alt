@@ -15,14 +15,6 @@ export default defineConfig({
             if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router')) {
               return 'vendor-react';
             }
-            // HLS.js video streaming library (~500KB+, dynamically loaded on video preview)
-            if (id.includes('node_modules/hls.js')) {
-              return 'vendor-hls';
-            }
-            // PDF.js rendering engine (~400KB+, dynamically loaded on PDF preview)
-            if (id.includes('node_modules/pdfjs-dist')) {
-              return 'vendor-pdfjs';
-            }
             // Drag-and-drop utilities (only loaded on admin / reordering pages)
             if (id.includes('node_modules/@dnd-kit')) {
               return 'vendor-dndkit';

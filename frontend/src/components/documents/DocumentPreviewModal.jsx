@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { getDocumentPreviewData, rebuildDocumentPreview } from '../../services/api';
 import {
   Dialog,
@@ -12,12 +12,7 @@ import { PreviewStatePanel } from './PreviewStatePanel';
 import {
   hasRenderablePages,
   isPreviewPending,
-  isPreviewFailed,
 } from '../../utils/previewState';
-import { PdfJsViewer } from './PdfJsViewer';
-import { VideoViewer } from './VideoViewer';
-import { SpreadsheetViewer } from './SpreadsheetViewer';
-import { MarkdownViewer } from './MarkdownViewer';
 import { ViewerToolbar } from '../viewer/ViewerToolbar';
 import { printPdf, printImages } from '../../lib/print';
 
@@ -38,23 +33,6 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
     setRebuildTriggerCount((prev) => prev + 1);
   };
 
-  const handleTokenExpired = useCallback(async () => {
-    if (!isOpen || !documentId) return;
-    const requestContext = `${documentId}-${versionId}`;
-    try {
-      const response = await getDocumentPreviewData(documentId, versionId);
-      if (!isOpen || !documentId || lastLoadedDocRef.current !== requestContext) {
-        return;
-      }
-      setDocumentData(response.data);
-    } catch (err) {
-      console.error('Failed to refresh preview token:', err);
-      if (isOpen && documentId && lastLoadedDocRef.current === requestContext) {
-        setError(err.response?.data?.detail || 'Failed to refresh preview. Please reload the page.');
-      }
-    }
-  }, [isOpen, documentId, versionId]);
-
   const modalViewerRef = useRef(null);
   const viewerComponentRef = useRef(null);
   const lastLoadedDocRef = useRef(null);
@@ -66,10 +44,6 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
       setTotalPages(documentData.num_pages || (documentData.pages?.length || 1));
     }
   }, [documentData]);
-
-  const handleDocumentLoad = useCallback(({ numPages }) => {
-    setTotalPages(numPages);
-  }, []);
 
   useEffect(() => {
     if (!isOpen || !documentId) {
@@ -176,15 +150,11 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
   const handlePrint = () => {
     if (!documentData) return;
 
-    if (documentData.preview_mode === 'client_pdf') {
-      printPdf(documentData.pdf_preview_url);
+    if (documentData.download_url && documentData.type === 'pdf') {
+      printPdf(documentData.download_url);
     } else {
-      if (documentData.download_url && documentData.type === 'pdf') {
-        printPdf(documentData.download_url);
-      } else {
-        const imageUrls = documentData.pages?.map((p) => p.url) || [];
-        printImages(imageUrls);
-      }
+      const imageUrls = documentData.pages?.map((p) => p.url) || [];
+      printImages(imageUrls);
     }
   };
 
@@ -205,7 +175,7 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
             </div>
           )}
           {error && <p className="text-center text-red-500">{error}</p>}
-          {documentData && (hasRenderablePages(documentData) || documentData.preview_mode === 'client_pdf' || documentData.preview_mode === 'spreadsheet' || documentData.preview_mode === 'markdown') && !isLoading && !error && (
+          {documentData && hasRenderablePages(documentData) && !isLoading && !error && (
             <ViewerToolbar
               allowDownload={Boolean(documentData.download_url)}
               downloadUrl={documentData.download_url}
@@ -224,7 +194,7 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
             />
           )}
 
-          {documentData && hasRenderablePages(documentData) && documentData.preview_mode !== 'client_pdf' && documentData.preview_mode !== 'spreadsheet' && documentData.preview_mode !== 'markdown' && (
+          {documentData && hasRenderablePages(documentData) && (
             <PreviewViewer
               ref={viewerComponentRef}
               documentData={documentData}
@@ -232,48 +202,7 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
               onPageChange={setCurrentPage}
             />
           )}
-          {documentData && documentData.preview_mode === 'spreadsheet' && !isPreviewPending(documentData) && !isPreviewFailed(documentData) && (
-            <SpreadsheetViewer
-              ref={viewerComponentRef}
-              spreadsheetUrl={documentData.spreadsheet_preview_url}
-              title={documentData.name}
-              allowDownload={Boolean(documentData.download_url)}
-              zoomLevel={zoomLevel}
-              documentData={documentData}
-            />
-          )}
-          {documentData && documentData.preview_mode === 'markdown' && (
-            <MarkdownViewer
-              ref={viewerComponentRef}
-              markdownUrl={documentData.markdown_preview_url}
-              title={documentData.name}
-              allowDownload={Boolean(documentData.download_url)}
-              zoomLevel={zoomLevel}
-              documentData={documentData}
-            />
-          )}
-          {documentData && documentData.preview_mode === 'client_pdf' && (
-            <PdfJsViewer
-              ref={viewerComponentRef}
-              pdfUrl={documentData.pdf_preview_url}
-              zoomLevel={zoomLevel}
-              onPageChange={setCurrentPage}
-              onDocumentLoad={handleDocumentLoad}
-              documentData={documentData}
-            />
-          )}
-          {documentData && documentData.preview_mode === 'video' && (
-            <div className="flex h-full w-full items-center justify-center p-4 bg-zinc-900 rounded-xl">
-              <VideoViewer
-                ref={viewerComponentRef}
-                videoUrl={documentData.video_preview_url}
-                allowDownload={Boolean(documentData.download_url)}
-                downloadUrl={documentData.download_url}
-                onTokenExpired={handleTokenExpired}
-              />
-            </div>
-          )}
-          {documentData && !hasRenderablePages(documentData) && documentData.preview_mode !== 'client_pdf' && documentData.preview_mode !== 'video' && documentData.preview_mode !== 'markdown' && (documentData.preview_mode !== 'spreadsheet' || isPreviewPending(documentData) || isPreviewFailed(documentData)) && !error && (
+          {documentData && !hasRenderablePages(documentData) && !error && (
             <PreviewStatePanel
               documentData={documentData}
               allowDownload={Boolean(documentData.download_url)}

@@ -1,0 +1,6 @@
+# Development and test tooling. Not installed in the production image.
+-r requirements.txt
+pytest==8.2.2
+pytest-django==4.8.0
+pytest-bdd==8.1.0
+openapi-spec-validator==0.7.1

@@ -26,8 +26,6 @@ describe('DocumentHeader', () => {
           onCreateLink={vi.fn()}
           onPreview={vi.fn()}
           onUploadNewVersion={vi.fn()}
-          onImportVersionFromCloud={vi.fn()}
-          onRefreshFromCloud={vi.fn()}
           onDownload={vi.fn()}
           onVersionHistory={vi.fn()}
           onDelete={vi.fn()}
@@ -111,21 +109,6 @@ describe('DocumentHeader', () => {
     fireEvent.blur(input);
     expect(onRenameDocument).not.toHaveBeenCalled();
     expect(screen.getByText('Sample Document.pdf')).toBeInTheDocument();
-  });
-
-  it('renders cloud import badge and tooltip with file ID', () => {
-    const cloudDoc = {
-      ...mockDoc,
-      cloud_import: {
-        provider: 'dropbox',
-        provider_display: 'Dropbox',
-        file_id: '/photos/how to use the photos folder.txt',
-      },
-    };
-    renderComponent({ document: cloudDoc });
-
-    expect(screen.getByText(/Imported from Dropbox/i)).toBeInTheDocument();
-    expect(screen.getByText('/photos/how to use the photos folder.txt')).toBeInTheDocument();
   });
 
   it('resets editedName to document.name when entering edit mode, overriding any failed unsaved edits', () => {

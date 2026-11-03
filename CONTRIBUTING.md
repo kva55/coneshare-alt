@@ -16,7 +16,6 @@ Coneshare is organized as a multi-service monorepo:
 - `backend/`: Django + Django REST Framework API & Celery tasks
 - `core/`: Go service for high-performance file proxying & streaming
 - `frontend/`: React + Vite single-page application
-- `portal/`: Next.js marketing and documentation site
 
 ### Quick Start with Docker
 

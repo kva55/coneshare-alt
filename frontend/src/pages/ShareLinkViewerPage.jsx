@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef, useCallback, lazy, Suspense } from 'react';
+import { useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { FileDown, MessageCircle, Info, X, AlertTriangle, AlertCircle, Clock } from 'lucide-react';
+import { FileDown, MessageCircle, Info, X, AlertCircle, Clock } from 'lucide-react';
 import { PasswordForm } from '../components/viewer/PasswordForm';
 import { EmailForm } from '../components/viewer/EmailForm';
 import { NDAForm } from '../components/viewer/NDAForm';
@@ -13,10 +13,6 @@ import { ViewerErrorBoundary } from '../components/viewer/ViewerErrorBoundary';
 
 const DataroomViewer = lazy(() => import('../components/viewer/DataroomViewer').then(m => ({ default: m.DataroomViewer })));
 const PreviewViewer = lazy(() => import('../components/documents/PreviewViewer').then(m => ({ default: m.PreviewViewer })));
-const PdfJsViewer = lazy(() => import('../components/documents/PdfJsViewer').then(m => ({ default: m.PdfJsViewer })));
-const VideoViewer = lazy(() => import('../components/documents/VideoViewer').then(m => ({ default: m.VideoViewer })));
-const SpreadsheetViewer = lazy(() => import('../components/documents/SpreadsheetViewer').then(m => ({ default: m.SpreadsheetViewer })));
-const MarkdownViewer = lazy(() => import('../components/documents/MarkdownViewer').then(m => ({ default: m.MarkdownViewer })));
 const PreviewStatePanel = lazy(() => import('../components/documents/PreviewStatePanel').then(m => ({ default: m.PreviewStatePanel })));
 import { printPdf, printImages } from '../lib/print';
 import { Skeleton } from '../components/ui/Skeleton';
@@ -131,10 +127,6 @@ export function ShareLinkViewerPage() {
       setTotalPages(viewData.num_pages || (viewData.pages?.length || 1));
     }
   }, [viewData]);
-
-  const handleDocumentLoad = useCallback(({ numPages }) => {
-    setTotalPages(numPages);
-  }, []);
 
   const handleFullScreen = () => {
     if (viewerRef.current) {
@@ -401,23 +393,12 @@ export function ShareLinkViewerPage() {
   const handlePrint = () => {
     if (!viewData || !viewData.link_settings?.allow_download) return;
 
-    const isWatermarked = Boolean(viewData.link_settings?.enable_watermark);
-
-    if (viewData.preview_mode === 'client_pdf') {
-      if (isWatermarked && downloadUrl) {
-        const inlineUrl = downloadUrl.includes('?') ? `${downloadUrl}&inline=true` : `${downloadUrl}?inline=true`;
-        printPdf(inlineUrl);
-      } else {
-        printPdf(viewData.pdf_preview_url);
-      }
+    if (viewData.type === 'pdf' && downloadUrl) {
+      const inlineUrl = downloadUrl.includes('?') ? `${downloadUrl}&inline=true` : `${downloadUrl}?inline=true`;
+      printPdf(inlineUrl);
     } else {
-      if (viewData.type === 'pdf' && downloadUrl) {
-        const inlineUrl = downloadUrl.includes('?') ? `${downloadUrl}&inline=true` : `${downloadUrl}?inline=true`;
-        printPdf(inlineUrl);
-      } else {
-        const imageUrls = viewData.pages?.map((p) => p.url) || [];
-        printImages(imageUrls);
-      }
+      const imageUrls = viewData.pages?.map((p) => p.url) || [];
+      printImages(imageUrls);
     }
   };
 
@@ -546,26 +527,12 @@ export function ShareLinkViewerPage() {
   }
 
   // Document-specific state and handlers
-  const PREVIEWABLE_TYPES = ['image', 'pdf', 'document', 'video', 'spreadsheet', 'markdown'];
-  const isPreviewable = viewData && PREVIEWABLE_TYPES.includes(viewData.type);
+  // Only PDFs are previewable; every other type is stored but never rendered.
+  const isPreviewable = Boolean(viewData && viewData.type === 'pdf');
   const canDownload = Boolean(viewData?.link_settings?.allow_download);
   const isQnaEnabled = viewData?.link_settings?.enable_qna !== false;
-  const isVideo = viewData && viewData.type === 'video';
-  const isVideoReady = isVideo && viewData.preview_status === 'ready';
-  const isSpreadsheet = viewData && viewData.preview_mode === 'spreadsheet';
-  const isSpreadsheetReady = isSpreadsheet && (viewData.preview_status === 'ready' || Boolean(viewData.spreadsheet_preview_url));
-  const isMarkdown = viewData && viewData.preview_mode === 'markdown';
-  const isMarkdownReady = isMarkdown && (viewData.preview_status === 'ready' || Boolean(viewData.markdown_preview_url));
   const canRenderPages = hasRenderablePages(viewData);
-  const showPreviewState = viewData && isPreviewable && !viewData.download_only && (
-    isVideo
-      ? !isVideoReady
-      : isSpreadsheet
-        ? !isSpreadsheetReady
-        : isMarkdown
-          ? !isMarkdownReady
-          : (!canRenderPages && viewData.preview_mode !== 'client_pdf')
-  );
+  const showPreviewState = viewData && isPreviewable && !viewData.download_only && !canRenderPages;
   const qnaButtonLabel = (isQnaOpen
     ? t('qna.closeQna', { defaultValue: 'Close Q&A' })
     : t('qna.openQna', { defaultValue: 'Open Q&A' })) +
@@ -579,10 +546,6 @@ export function ShareLinkViewerPage() {
   const effectiveLogoUrl = viewData?.resolved_brand_logo_url || viewData?.dataroom_context?.resolved_brand_logo_url || publicMeta?.resolved_brand_logo_url || brandLogoUrl;
 
   if (viewData && (viewData.download_only || !isPreviewable)) {
-    const isWatermarkedVideoBlocked = viewData.type === 'video' && 
-      viewData.link_settings?.enable_watermark && 
-      viewData.download_only;
-
     return (
       <div className="relative flex flex-col h-screen w-screen overflow-hidden bg-gray-50">
         {previewToken && showPreviewBanner && (
@@ -601,15 +564,9 @@ export function ShareLinkViewerPage() {
         <div className="flex-1 flex items-center justify-center p-4 overflow-y-auto">
           <div className="w-full max-w-xl rounded-2xl bg-white border border-gray-200/80 p-8 sm:p-10 text-center shadow-xl shadow-gray-200/50">
             <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl">
-              {isWatermarkedVideoBlocked ? (
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 ring-8 ring-amber-50/50">
-                  <AlertTriangle className="h-8 w-8" />
-                </div>
-              ) : (
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 text-gray-600 ring-8 ring-gray-100/60">
-                  <FileDown className="h-8 w-8" />
-                </div>
-              )}
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 text-gray-600 ring-8 ring-gray-100/60">
+                <FileDown className="h-8 w-8" />
+              </div>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 truncate" title={viewData.name}>
               {viewData.name}
@@ -618,15 +575,9 @@ export function ShareLinkViewerPage() {
               <p className="mt-1 text-sm font-medium text-gray-500">{formatBytes(viewData.file_size)}</p>
             ) : null}
             <p className="mt-3 mb-6 text-sm text-gray-600 leading-relaxed max-w-sm mx-auto">
-              {isWatermarkedVideoBlocked
-                ? t('viewer.watermarkedVideoBlockedNotice')
-                : t('viewer.previewNotAvailableNotice')}
+              {t('viewer.previewNotAvailableNotice')}
             </p>
-            {isWatermarkedVideoBlocked ? (
-              <Button size="lg" className="w-full h-11 rounded-xl font-medium" disabled>
-                {t('viewer.downloadRestricted')}
-              </Button>
-            ) : canDownload ? (
+            {canDownload ? (
               <Button asChild size="lg" className="w-full h-11 rounded-xl font-medium gap-2 shadow-sm">
                 <a href={downloadUrl} download={viewData.name}>
                   <FileDown className="h-4 w-4" />
@@ -702,12 +653,10 @@ export function ShareLinkViewerPage() {
     );
   }
 
-  const isVideoMode = viewData?.preview_mode === 'video';
-
   return (
     <div
       ref={viewerRef}
-      className={`relative flex flex-col h-screen w-screen overflow-hidden transition-colors duration-300 ${isVideoMode ? 'bg-zinc-900' : 'bg-gray-50'} transition-[padding] duration-200 ${isQnaOpen ? 'lg:pr-[34rem] xl:pr-[38rem]' : ''}`}
+      className={`relative flex flex-col h-screen w-screen overflow-hidden transition-colors duration-300 bg-gray-50 transition-[padding] duration-200 ${isQnaOpen ? 'lg:pr-[34rem] xl:pr-[38rem]' : ''}`}
     >
       {previewToken && showPreviewBanner && (
         <PreviewBanner onClose={() => setShowPreviewBanner(false)} />
@@ -728,25 +677,23 @@ export function ShareLinkViewerPage() {
       />
       {viewData && (
         <div className="relative flex-1 min-h-0 w-full overflow-hidden">
-          {viewData.preview_mode !== 'video' && (
-            <ViewerToolbar
-              allowDownload={Boolean(viewData.link_settings?.allow_download)}
-              downloadUrl={downloadUrl}
-              downloadFileName={viewData.name}
-              downloadDocumentId={dataroomDocumentIdFromUrl || null}
-              onFullScreen={handleFullScreen}
-              onZoomIn={handleZoomIn}
-              onZoomOut={handleZoomOut}
-              zoomLevel={zoomLevel}
-              onFitWidth={handleFitWidth}
-              onPageChange={handlePageChange}
-              currentPage={currentPage}
-              totalPages={totalPages}
-              viewId={viewId}
-              previewMode={viewData.preview_mode}
-              onPrint={handlePrint}
-            />
-          )}
+          <ViewerToolbar
+            allowDownload={Boolean(viewData.link_settings?.allow_download)}
+            downloadUrl={downloadUrl}
+            downloadFileName={viewData.name}
+            downloadDocumentId={dataroomDocumentIdFromUrl || null}
+            onFullScreen={handleFullScreen}
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            zoomLevel={zoomLevel}
+            onFitWidth={handleFitWidth}
+            onPageChange={handlePageChange}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            viewId={viewId}
+            previewMode={viewData.preview_mode}
+            onPrint={handlePrint}
+          />
           <ViewerErrorBoundary>
             <Suspense
               fallback={
@@ -755,82 +702,14 @@ export function ShareLinkViewerPage() {
                 </div>
               }
             >
-              {viewData.preview_mode === 'video' ? (
-                <div className="flex h-full w-full items-center justify-center p-8">
-                  <VideoViewer
-                    ref={viewerComponentRef}
-                    videoUrl={viewData.video_preview_url}
-                    viewId={viewId}
-                    dataroomVisitId={dataroomVisitId}
-                    allowDownload={viewData.link_settings?.allow_download}
-                    downloadUrl={downloadUrl}
-                    onTokenExpired={() => setRefetchTrigger((c) => c + 1)}
-                  />
-                </div>
-              ) : viewData.preview_mode === 'spreadsheet' ? (
-                <SpreadsheetViewer
-                  ref={viewerComponentRef}
-                  spreadsheetUrl={viewData.spreadsheet_preview_url}
-                  title={viewData.name}
-                  viewId={viewId}
-                  dataroomVisitId={dataroomVisitId}
-                  watermarkText={
-                    viewData.link_settings?.enable_watermark
-                      ? (viewData.link_settings.resolved_watermark_text || viewData.link_settings.watermark_text || '')
-                      : ''
-                  }
-                  allowDownload={viewData.link_settings?.allow_download ?? true}
-                  canCopy={viewData.link_settings?.can_copy ?? null}
-                  zoomLevel={zoomLevel}
-                  onPageChange={setCurrentPage}
-                  onDocumentLoad={handleDocumentLoad}
-                  documentData={viewData}
-                />
-              ) : viewData.preview_mode === 'markdown' ? (
-                <MarkdownViewer
-                  ref={viewerComponentRef}
-                  markdownUrl={viewData.markdown_preview_url}
-                  title={viewData.name}
-                  viewId={viewId}
-                  dataroomVisitId={dataroomVisitId}
-                  watermarkText={
-                    viewData.link_settings?.enable_watermark
-                      ? (viewData.link_settings.resolved_watermark_text || viewData.link_settings.watermark_text || '')
-                      : ''
-                  }
-                  allowDownload={viewData.link_settings?.allow_download ?? true}
-                  canCopy={viewData.link_settings?.can_copy ?? null}
-                  zoomLevel={zoomLevel}
-                  documentData={viewData}
-                />
-              ) : viewData.preview_mode === 'client_pdf' ? (
-                <PdfJsViewer
-                  ref={viewerComponentRef}
-                  pdfUrl={viewData.pdf_preview_url}
-                  viewId={viewId}
-                  dataroomVisitId={dataroomVisitId}
-                  watermarkText={
-                    viewData.link_settings?.enable_watermark
-                      ? (viewData.link_settings.resolved_watermark_text || viewData.link_settings.watermark_text || '')
-                      : ''
-                  }
-                  allowDownload={Boolean(viewData.link_settings?.allow_download)}
-                  isWatermarked={Boolean(viewData.link_settings?.enable_watermark)}
-                  zoomLevel={zoomLevel}
-                  onPageChange={setCurrentPage}
-                  onDocumentLoad={handleDocumentLoad}
-                  documentData={viewData}
-                />
-              ) : (
-                <PreviewViewer
-                  ref={viewerComponentRef}
-                  documentData={viewData}
-                  zoomLevel={zoomLevel}
-                  onPageChange={setCurrentPage}
-                  viewId={viewId}
-                  dataroomVisitId={dataroomVisitId}
-                />
-              )}
+              <PreviewViewer
+                ref={viewerComponentRef}
+                documentData={viewData}
+                zoomLevel={zoomLevel}
+                onPageChange={setCurrentPage}
+                viewId={viewId}
+                dataroomVisitId={dataroomVisitId}
+              />
             </Suspense>
           </ViewerErrorBoundary>
           <QnAPanel

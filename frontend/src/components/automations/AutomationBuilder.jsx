@@ -10,7 +10,6 @@ const getEventOptions = (t) => [
   { value: 'document_viewed', label: t('automations.eventDocumentViewed') },
   { value: 'document_downloaded', label: t('automations.eventDocumentDownloaded') },
   { value: 'email_identified', label: t('automations.eventEmailIdentified') },
-  { value: 'file_request_uploaded', label: t('automations.eventFileRequestUploaded') },
 ];
 
 export function AutomationBuilder({

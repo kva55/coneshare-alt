@@ -1,4 +1,4 @@
-import { ChevronsUpDown, CircleUserRound, KeyRound, LogOut, Shield, Cloud, Lock, Sparkles } from "lucide-react";
+import { ChevronsUpDown, CircleUserRound, KeyRound, LogOut, Shield, Lock, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/Avatar";
@@ -76,10 +76,6 @@ function NavUser() {
           <DropdownMenuItem onSelect={() => navigate("/settings/password")}>
             <Lock className="mr-2 h-4 w-4" />
             <span>{t('settings.changePassword')}</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => navigate("/settings/integrations")}>
-            <Cloud className="mr-2 h-4 w-4" />
-            <span>{t('settings.cloudStorage')}</span>
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => navigate("/settings/api-keys")}>
             <Sparkles className="mr-2 h-4 w-4" />

@@ -64,7 +64,7 @@ def ensure_default_email_automation(owner: User, organization: Organization):
             scope_type=AutomationRule.ScopeType.GLOBAL,
             name=rule_name,
             defaults={
-                'subscribed_events': ['document_viewed', 'dataroom_opened', 'document_downloaded', 'file_request_uploaded'],
+                'subscribed_events': ['document_viewed', 'dataroom_opened', 'document_downloaded'],
                 'is_active': True
             }
         )

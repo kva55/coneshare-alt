@@ -26,7 +26,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, APIException, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from django.db.models import Count, F, Max, Q
+from django.db.models import Count, F, Q
 from geoip2.errors import AddressNotFoundError
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, inline_serializer
@@ -1035,9 +1035,6 @@ class ShareLinkViewDataView(APIView):
             render_status = renderer.enqueue_render_task(primary_version)
 
             preview_status = preview_status_for_render_status(render_status)
-            if preview_mode in {'client_pdf', 'markdown'}:
-                preview_status = 'ready'
-
             # Determine the correct settings to use (link vs. item-specific)
             allow_download = link.allow_download
             enable_watermark = link.enable_watermark
@@ -1046,19 +1043,11 @@ class ShareLinkViewDataView(APIView):
                 allow_download = dataroom_setting.allow_download
                 enable_watermark = dataroom_setting.enable_watermark
 
-            # Forcefully disable video downloading if watermarking is enabled
-            if document.type == 'video' and enable_watermark:
-                allow_download = False
-
             # Forcefully disable downloading if watermarking is enabled but file exceeds watermark size limit
             max_watermark_mb = get_max_watermark_file_size_mb()
             file_size = (primary_version.file_size if primary_version else 0) or getattr(document, 'file_size', 0) or 0
             if enable_watermark and file_size > (max_watermark_mb * 1024 * 1024):
                 allow_download = False
-
-            # Watermarking is not supported for video previews
-            if document.type == 'video':
-                enable_watermark = False
 
             pages_data = []
             if renderer.should_serve_pages(primary_version, render_status):
@@ -1087,9 +1076,6 @@ class ShareLinkViewDataView(APIView):
                         )
                     else:
                         download_url = urljoin(settings.SITE_DOMAIN, base_url)
-                elif document.type == 'image' and pages_data:
-                    # For images, the download URL is the same as the single page's URL.
-                    download_url = pages_data[0]['url']
                 elif primary_version and primary_version.original_storage_key:
                     try:
                         download_url = fileserver_client.generate_download_url(
@@ -1099,45 +1085,6 @@ class ShareLinkViewDataView(APIView):
                         # If file server is down, we can't generate a download URL.
                         download_url = None
 
-            # Generate a signed PDF URL for PDF.js/client-side preview.
-            pdf_preview_url = None
-            if preview_mode == 'client_pdf':
-                try:
-                    pdf_preview_url = fileserver_client.generate_preview_url(
-                        primary_version.original_storage_key, is_internal=False
-                    )
-                except APIException as e:
-                    logger.warning(f"Failed to generate client PDF URL for version {primary_version.id}: {e}")
-                    pdf_preview_url = None
-
-            video_preview_url = None
-            if preview_mode == 'video' and render_status == 'ready':
-                try:
-                    video_duration = primary_version.length or 0
-                    stream_ttl = max(14400, video_duration + 3600)
-                    playlist_url = fileserver_client.generate_preview_url(
-                        primary_version.storage_key, is_internal=False, expiry_seconds=stream_ttl
-                    )
-                    video_preview_url = f"{playlist_url}/playlist.m3u8"
-                except APIException as e:
-                    logger.warning(f"Failed to generate client video URL for version {primary_version.id}: {e}")
-                    video_preview_url = None
-
-            spreadsheet_preview_url = None
-            if preview_mode == 'spreadsheet' and render_status == 'ready':
-                if hasattr(renderer, 'get_spreadsheet_preview_url'):
-                    spreadsheet_preview_url = renderer.get_spreadsheet_preview_url(primary_version)
-
-            markdown_preview_url = None
-            if preview_mode == 'markdown':
-                try:
-                    source_key = primary_version.original_storage_key or primary_version.storage_key
-                    markdown_preview_url = fileserver_client.generate_preview_url(
-                        source_key, is_internal=False
-                    )
-                except APIException as e:
-                    logger.warning(f"Failed to generate client Markdown URL for version {primary_version.id}: {e}")
-                    markdown_preview_url = None
 
             # Resolve watermark template tokens for the frontend CSS overlay.
             # The raw template (e.g. "{{ip-address}} {{email}}") is resolved here so
@@ -1160,11 +1107,7 @@ class ShareLinkViewDataView(APIView):
                 "render_status": render_status,
                 "render_error": primary_version.render_error,
                 "pages": pages_data,
-                "pdf_preview_url": pdf_preview_url,
-                "video_preview_url": video_preview_url,
-                "spreadsheet_preview_url": spreadsheet_preview_url,
-                "markdown_preview_url": markdown_preview_url,
-                "download_url": download_url,
+                                                                                "download_url": download_url,
                 "link_settings": {
                     "id": link.id,
                     "allow_download": allow_download,
@@ -1288,14 +1231,14 @@ class ShareLinkViewDataView(APIView):
 
                 if doc_effective_download and doc_watermark:
                     d = doc.document
-                    if not d or d.type == 'video':
+                    if not d:
                         doc_effective_download = False
                     else:
                         primary_version = next((v for v in d.versions.all() if v.is_primary), None)
                         file_size = (primary_version.file_size if primary_version else 0) or getattr(d, 'file_size', 0) or 0
                         if file_size > max_watermark_bytes:
                             doc_effective_download = False
-                        elif d.type not in {'image', 'pdf'} and not (d.type == 'document' and bool(primary_version and primary_version.storage_key)):
+                        elif d.type != 'pdf':
                             doc_effective_download = False
 
                 doc_settings_map[doc.id] = {
@@ -2309,9 +2252,6 @@ class ShareLinkPageView(APIView):
         else:
             return Response({"message": "Invalid link target."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if document.type == 'video':
-            watermark_enabled = False
-
         if watermark_enabled:
             return Response(
                 {"message": "Watermarking is enabled for this file. Unwatermarked pages cannot be served directly."},
@@ -2492,45 +2432,6 @@ def _apply_watermark_to_image(image: Image, watermark_text: str) -> Image:
 
     return Image.alpha_composite(image, txt_layer)
 
-
-def _generate_watermarked_image(document, primary_version, watermark_text_template, request, viewer_email):
-    """
-    Generates a watermarked image in-memory and returns it as a BytesIO buffer and content type.
-    """
-    if not Image:
-        raise WatermarkingDependenciesMissingError("Pillow is not installed. Watermarking is not available.")
-
-    max_watermark_mb = get_max_watermark_file_size_mb()
-    file_size = getattr(primary_version, 'file_size', None) or getattr(document, 'file_size', 0) or 0
-    if file_size > (max_watermark_mb * 1024 * 1024):
-        raise WatermarkingError(f"Image size ({file_size // (1024 * 1024)}MB) exceeds the maximum limit ({max_watermark_mb}MB) for watermarking.")
-
-    # For images, the original storage key is the one we want.
-    source_image_key = primary_version.original_storage_key
-    if not source_image_key:
-        raise WatermarkingError("Source image for watermarking not found.")
-
-    try:
-        download_url = fileserver_client.generate_download_url(source_image_key, is_internal=True)
-        response = requests.get(download_url)
-        response.raise_for_status()
-        image = Image.open(BytesIO(response.content)).convert("RGBA")
-
-        watermark_text = _render_watermark_text(watermark_text_template, request, viewer_email=viewer_email)
-        
-        watermarked_image = _apply_watermark_to_image(image, watermark_text)
-
-        # Save to buffer. Using JPEG to be consistent with page rendering.
-        buffer = BytesIO()
-        watermarked_image.convert("RGB").save(buffer, format="JPEG", quality=WATERMARK_JPEG_QUALITY)
-        content_type = 'image/jpeg'
-        buffer.seek(0)
-
-        return buffer, content_type
-
-    except Exception as e:
-        logger.error("Failed to apply watermark to image: %s", type(e).__name__)
-        raise WatermarkingError("An error occurred while generating the watermarked image file.") from e
 
 
 def _generate_watermarked_pdf(document, primary_version, watermark_text, request, viewer_email):
@@ -2764,14 +2665,6 @@ class ShareLinkFileDownloadView(APIView):
         else:
             return Response({"message": "Invalid link target."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Forcefully block video download if watermarking is enabled
-        if document.type == 'video' and enable_watermark:
-            allow_download = False
-
-        # Watermarking is not supported for video files
-        if document.type == 'video':
-            enable_watermark = False
-
         if not allow_download:
             return Response({"message": "Download is not allowed for this item."}, status=status.HTTP_403_FORBIDDEN)
 
@@ -2848,10 +2741,7 @@ class ShareLinkFileDownloadView(APIView):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            is_watermarkable = (
-                document.type in {'image', 'pdf'} or
-                (document.type == 'document' and bool(primary_version and primary_version.storage_key))
-            )
+            is_watermarkable = document.type == 'pdf'
             if not is_watermarkable:
                 return Response(
                     {"message": "Watermarked download is not supported for this file type."},
@@ -2868,17 +2758,6 @@ class ShareLinkFileDownloadView(APIView):
             )
             disposition_type = 'inline' if is_inline else 'attachment'
             try:
-                if document.type == 'image':
-                    image_buffer, content_type = _generate_watermarked_image(
-                        document, primary_version, effective_watermark_text, request, viewer_email
-                    )
-                    response = HttpResponse(image_buffer, content_type=content_type)
-                    # Ensure filename has .jpg extension since we're creating a JPEG
-                    safe_filename, _ = os.path.splitext(get_valid_filename(document.name))
-                    response['Content-Disposition'] = f'{disposition_type}; filename="{safe_filename}.jpg"'
-                    return response
-
-                # Fallback for PDF and Office documents which become PDF
                 flatten_active = get_dynamic_setting('FLATTEN_WATERMARKED_DOWNLOADS')
                 if flatten_active:
                     pdf_buffer = _generate_flattened_watermarked_pdf(document, primary_version, effective_watermark_text, request, viewer_email)
@@ -3558,12 +3437,7 @@ class RecordPageView(APIView):
                 document = view_session.share_link.document
                 update_fields = ['duration_seconds']
                 if document:
-                    if document.type == 'markdown':
-                        max_scroll = view_session.page_views.filter(scroll_percentage__isnull=False).aggregate(Max('scroll_percentage'))['scroll_percentage__max']
-                        if max_scroll is not None:
-                            view_session.completion_rate = min(max_scroll / 100.0, 1.0)
-                            update_fields.append('completion_rate')
-                    elif document.num_pages and document.num_pages > 0:
+                    if document.num_pages and document.num_pages > 0:
                         viewed_pages_count = view_session.page_views.values('page_number').distinct().count()
                         completion_rate = viewed_pages_count / document.num_pages
                         view_session.completion_rate = min(completion_rate, 1.0)

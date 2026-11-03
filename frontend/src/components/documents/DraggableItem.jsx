@@ -25,7 +25,6 @@ export function DraggableItem({
   onRename,
   onDelete,
   onShare,
-  onRequestFiles,
   onToggleStar,
   onDownload,
   onCopy,
@@ -229,7 +228,6 @@ export function DraggableItem({
               onRename={onRename}
               onDelete={onDelete}
               onShare={onShare}
-              onRequestFiles={onRequestFiles}
               onDownload={onDownload}
               onCopy={onCopy}
               deleteLabel={deleteLabel}

@@ -107,95 +107,6 @@ class TestRecordPageView:
         view_session.refresh_from_db()
         assert view_session.duration_seconds == 15  # 10 + 5
 
-    def test_record_page_view_with_scroll_percentage_and_markdown(self, public_client, user):
-        """Test recording page view with scroll_percentage on a markdown document."""
-        doc = Document.objects.create(name="README.md", type="markdown", created_by=user, organization=user.organization)
-        link = ShareLink.objects.create(document=doc, created_by=user)
-        self._authorize_link_session(public_client, link)
-        view_session = ViewSession.objects.create(share_link=link)
-
-        data = {
-            'view_session': view_session.id,
-            'page_number': 1,
-            'duration_seconds': 12,
-            'scroll_percentage': 85
-        }
-        response = public_client.post('/api/v1/page-views/record/', data)
-
-        assert response.status_code == status.HTTP_200_OK
-        page_view = PageView.objects.get(view_session=view_session)
-        assert page_view.page_number == 1
-        assert page_view.duration_seconds == 12
-        assert page_view.scroll_percentage == 85
-        assert page_view.media_type == 'markdown'
-
-        view_session.refresh_from_db()
-        assert view_session.completion_rate == 0.85
-
-    def test_record_page_view_with_spreadsheet_document(self, public_client, user):
-        """Test recording page view preserves media_type spreadsheet for spreadsheet documents."""
-        doc = Document.objects.create(name="Report.xlsx", type="spreadsheet", created_by=user, organization=user.organization)
-        link = ShareLink.objects.create(document=doc, created_by=user)
-        self._authorize_link_session(public_client, link)
-        view_session = ViewSession.objects.create(share_link=link)
-
-        data = {
-            'view_session': view_session.id,
-            'page_number': 2,
-            'duration_seconds': 15,
-            'media_type': 'spreadsheet'
-        }
-        response = public_client.post('/api/v1/page-views/record/', data)
-
-        assert response.status_code == status.HTTP_200_OK
-        page_view = PageView.objects.get(view_session=view_session)
-        assert page_view.page_number == 2
-        assert page_view.duration_seconds == 15
-        assert page_view.media_type == 'spreadsheet'
-
-    def test_record_page_view_scroll_percentage_range_validation(self, public_client, user):
-        """Test that scroll_percentage outside 0-100 returns 400 Bad Request."""
-        doc = Document.objects.create(name="README.md", type="markdown", created_by=user, organization=user.organization)
-        link = ShareLink.objects.create(document=doc, created_by=user)
-        self._authorize_link_session(public_client, link)
-        view_session = ViewSession.objects.create(share_link=link)
-
-        # > 100 should fail
-        response = public_client.post('/api/v1/page-views/record/', {
-            'view_session': view_session.id,
-            'page_number': 1,
-            'duration_seconds': 5,
-            'scroll_percentage': 101
-        })
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'scroll_percentage' in response.data
-
-        # < 0 should fail
-        response = public_client.post('/api/v1/page-views/record/', {
-            'view_session': view_session.id,
-            'page_number': 1,
-            'duration_seconds': 5,
-            'scroll_percentage': -1
-        })
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'scroll_percentage' in response.data
-
-    def test_record_page_view_markdown_without_scroll_percentage_does_not_set_100_percent(self, public_client, user):
-        """Test that markdown document without scroll_percentage does not falsely set completion_rate to 1.0."""
-        doc = Document.objects.create(name="README.md", type="markdown", created_by=user, organization=user.organization)
-        link = ShareLink.objects.create(document=doc, created_by=user)
-        self._authorize_link_session(public_client, link)
-        view_session = ViewSession.objects.create(share_link=link)
-
-        response = public_client.post('/api/v1/page-views/record/', {
-            'view_session': view_session.id,
-            'page_number': 1,
-            'duration_seconds': 5,
-        })
-        assert response.status_code == status.HTTP_200_OK
-
-        view_session.refresh_from_db()
-        assert view_session.completion_rate is None or view_session.completion_rate == 0.0
 
     def test_record_page_view_invalid_view_id(self, public_client):
         """Test that recording a page view with an invalid view ID fails."""
@@ -816,65 +727,6 @@ class TestShareLinkViewDataView:
         assert data['pages'][0]['url'] == expected_url
         assert data['link_settings']['allow_download'] == share_link.allow_download
 
-    @override_settings(SITE_DOMAIN="http://test.coneshare.com")
-    def test_get_share_link_data_markdown_document(self, public_client, user):
-        """Test retrieval of share link data for markdown document exposes markdown_preview_url."""
-        doc = Document.objects.create(name="README.md", type="markdown", status="ready", created_by=user, organization=user.organization)
-        DocumentVersion.objects.create(
-            document=doc, version_number=1, is_primary=True, original_storage_key="org_1/notes.md",
-            content_type="text/markdown", file_size=1024, render_status="ready"
-        )
-        link = ShareLink.objects.create(document=doc, created_by=user)
-
-        with patch('documents.fileserver.fileserver_client.generate_preview_url', return_value="http://test.coneshare.com/files/preview/abc123"):
-            response = public_client.get(f'/api/v1/links/{link.slug}/view-data/')
-
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data['preview_mode'] == 'markdown'
-        assert data['preview_status'] == 'ready'
-        assert data['markdown_preview_url'] == "http://test.coneshare.com/files/preview/abc123"
-        assert data['pages'] == []
-
-    @override_settings(SITE_DOMAIN="http://test.coneshare.com", ENABLE_VIDEO_PREVIEW=True)
-    def test_get_share_link_data_video_stream_ttl(self, public_client, user):
-        """Test that video stream URL generation passes extended TTL calculated from video length."""
-        doc = Document.objects.create(
-            name="presentation.mp4",
-            type="video",
-            status="ready",
-            created_by=user,
-            organization=user.organization,
-        )
-        version = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            is_primary=True,
-            original_storage_key="org_1/presentation.mp4",
-            storage_key="org_1/hls/presentation_hls",
-            content_type="video/mp4",
-            file_size=1024 * 1024,
-            render_status="ready",
-            length=18000,  # 5 hours
-        )
-        link = ShareLink.objects.create(document=doc, created_by=user)
-
-        with patch('sharelinks.views.fileserver_client.generate_preview_url', return_value="http://test.coneshare.com/files/preview/stream123") as mock_preview_url:
-            response = public_client.get(f'/api/v1/links/{link.slug}/view-data/')
-            assert response.status_code == status.HTTP_200_OK
-            data = response.json()
-            assert data['preview_mode'] == 'video'
-            assert data['video_preview_url'] == "http://test.coneshare.com/files/preview/stream123/playlist.m3u8"
-            mock_preview_url.assert_called_with("org_1/hls/presentation_hls", is_internal=False, expiry_seconds=21600)
-
-            # Test short duration falls back to 14400 (4 hours)
-            version.length = 300
-            version.save()
-            mock_preview_url.reset_mock()
-
-            response = public_client.get(f'/api/v1/links/{link.slug}/view-data/')
-            assert response.status_code == status.HTTP_200_OK
-            mock_preview_url.assert_called_with("org_1/hls/presentation_hls", is_internal=False, expiry_seconds=14400)
 
     @override_settings(SITE_DOMAIN="http://test.coneshare.com")
     @patch('sharelinks.views.fileserver_client.generate_download_url')
@@ -897,43 +749,6 @@ class TestShareLinkViewDataView:
 
         mock_fs_download_url.assert_called_once_with("path/to/original.pdf", is_internal=False, filename=share_link.document.name)
 
-    @override_settings(SITE_DOMAIN="http://test.coneshare.com")
-    @patch('documents.fileserver.fileserver_client.generate_download_url')
-    def test_get_share_link_data_for_spreadsheet(self, mock_fs_download_url, public_client, user):
-        """Test that public share link returns spreadsheet_preview_url and preview_mode='spreadsheet'."""
-        mock_fs_download_url.return_value = "http://test.coneshare.com/files/download/sheet.json"
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            name="forecast.xlsx",
-            type="spreadsheet",
-            status="ready",
-            num_pages=3
-        )
-        ver = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            type="spreadsheet",
-            is_primary=True,
-            has_pages=False,
-            num_pages=3,
-            storage_key="documents/1/forecast_spreadsheet.json",
-            original_storage_key="documents/1/forecast.xlsx",
-            render_status="ready"
-        )
-        link = ShareLink.objects.create(
-            created_by=user,
-            document=doc,
-            slug="sheet-slug-123"
-        )
-        response = public_client.get(f'/api/v1/links/{link.slug}/view-data/')
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data['type'] == 'spreadsheet'
-        assert data['preview_mode'] == 'spreadsheet'
-        assert data['preview_status'] == 'ready'
-        assert data['spreadsheet_preview_url'] == "http://test.coneshare.com/files/download/sheet.json"
-        assert data['num_pages'] == 3
 
     @patch.object(BasePreviewRenderer, 'enqueue_render_task')
     @patch('sharelinks.views.fileserver_client.generate_download_url')
@@ -960,7 +775,7 @@ class TestShareLinkViewDataView:
         mock_fs_download_url.return_value = 'https://...'
         mock_enqueue_preview.return_value = DocumentVersion.RENDER_QUEUED
 
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages'):
+        with override_settings():
             response = public_client.get(f'/api/v1/links/{share_link.slug}/view-data/')
 
             assert response.status_code == status.HTTP_200_OK
@@ -970,34 +785,6 @@ class TestShareLinkViewDataView:
             mock_enqueue_preview.assert_called_once_with(primary_version)
             mock_fs_download_url.assert_not_called()
 
-    @override_settings(SITE_DOMAIN="http://test.coneshare.com")
-    def test_get_share_link_data_for_image_document(self, public_client, image_document_with_content, user):
-        """
-        Test successful retrieval of share link data for an image, ensuring it
-        returns a secure, proxied page URL.
-        """
-        # Setup
-        image_share_link = ShareLink.objects.create(
-            document=image_document_with_content,
-            created_by=user
-        )
-
-        # Action
-        response = public_client.get(f'/api/v1/links/{image_share_link.slug}/view-data/')
-
-        # Assertions
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data['id'] == str(image_document_with_content.id)
-        assert data['type'] == 'image'
-        assert data['num_pages'] == 1
-        assert len(data['pages']) == 1
-
-        page_data = data['pages'][0]
-        assert page_data['page_number'] == 1
-
-        expected_url = f"http://test.coneshare.com/api/v1/links/{image_share_link.slug}/page/1/"
-        assert page_data['url'] == expected_url
 
     def test_get_share_link_data_not_found(self, public_client):
         """Test getting a link with a non-existent slug returns 404."""
@@ -1044,56 +831,6 @@ class TestShareLinkViewDataView:
         assert link_settings['watermark_text'] == 'CONFIDENTIAL - {{email}}'
         assert link_settings['resolved_watermark_text'] != ''
 
-    def test_get_share_link_data_dataroom_catalog_gates_allow_download_on_watermark_size_and_video(
-        self, public_client, dataroom, user, document_factory
-    ):
-        link = ShareLink.objects.create(
-            dataroom=dataroom,
-            created_by=user,
-            allow_download=True,
-            enable_watermark=True,
-        )
-
-        # 1. Normal PDF within size limit
-        doc_normal = document_factory(name="Normal.pdf", type='pdf')
-        v_normal = doc_normal.versions.filter(is_primary=True).first()
-        v_normal.file_size = 5 * 1024 * 1024  # 5 MB
-        v_normal.save()
-        ddoc_normal = DataroomDocument.objects.create(dataroom=dataroom, document=doc_normal)
-
-        # 2. Oversized PDF exceeding max watermark limit (100 MB)
-        doc_oversized = document_factory(name="Oversized.pdf", type='pdf')
-        v_oversized = doc_oversized.versions.filter(is_primary=True).first()
-        v_oversized.file_size = 150 * 1024 * 1024  # 150 MB
-        v_oversized.save()
-        ddoc_oversized = DataroomDocument.objects.create(dataroom=dataroom, document=doc_oversized)
-
-        # 3. Video (cannot be watermarked, so allow_download must be False)
-        doc_video = document_factory(name="Movie.mp4", type='video')
-        v_video = doc_video.versions.filter(is_primary=True).first()
-        v_video.file_size = 20 * 1024 * 1024
-        v_video.save()
-        ddoc_video = DataroomDocument.objects.create(dataroom=dataroom, document=doc_video)
-
-        # 4. Folder
-        folder = DataroomFolder.objects.create(dataroom=dataroom, name="Presentations")
-
-        response = public_client.get(f'/api/v1/links/{link.slug}/view-data/')
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        items = data['items']
-
-        doc_map = {item['id']: item for item in items if item['type'] == 'document'}
-        folder_map = {item['id']: item for item in items if item['type'] == 'folder'}
-
-        # Normal PDF must allow download
-        assert doc_map[str(ddoc_normal.id)]['allow_download'] is True
-        # Oversized PDF must have allow_download forced to False
-        assert doc_map[str(ddoc_oversized.id)]['allow_download'] is False
-        # Video in watermark link must have allow_download forced to False
-        assert doc_map[str(ddoc_video.id)]['allow_download'] is False
-        # Folder must have allow_download True (since link.allow_download is True)
-        assert folder_map[str(folder.id)]['allow_download'] is True
 
     def test_get_share_link_data_dataroom_catalog_gates_allow_download_on_link_allow_download_false(
         self, public_client, dataroom, user, document_factory
@@ -1977,7 +1714,7 @@ class TestDataroomVisitTracking:
         mock_fs_download_url.return_value = 'https://...'
         mock_enqueue_preview.return_value = DocumentVersion.RENDER_QUEUED
 
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages'):
+        with override_settings():
             response = public_client.get(f"/api/v1/links/{link.slug}/view-data/?dataroom_document_id={ddoc.id}")
      
             assert response.status_code == status.HTTP_200_OK
@@ -2086,7 +1823,6 @@ class TestDataroomVisitTracking:
         assert data["link_settings"]["enable_watermark"] is True
         assert data["pages"][0]["url"] == f"http://test.coneshare.com/api/v1/links/{link.slug}/render-page/1/?dataroom_document_id={ddoc.id}"
 
-
     def test_render_page_rejects_dataroom_document_when_item_watermark_is_disabled(
         self, public_client, user, dataroom, image_document_with_content
     ):
@@ -2119,6 +1855,7 @@ class TestDataroomVisitTracking:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.json()["message"] == "Watermarking is not enabled for this file."
+
 
 @pytest.mark.django_db
 class TestShareLinkPreview:
@@ -3504,37 +3241,6 @@ class TestWatermarkingViews:
         share_link_with_watermark.save()
         return share_link_with_watermark
 
-    @pytest.fixture
-    def office_document(self, document_factory):
-        """Fixture for an office document."""
-        doc = document_factory(name="Test Office.docx", type='document')
-        # We need to give the version a storage_key, which for office docs is the converted PDF key
-        version = doc.versions.get(is_primary=True)
-        version.storage_key = "path/to/converted.pdf"
-        version.save()
-        return doc
-
-    @pytest.fixture
-    def watermarked_office_link(self, office_document, user):
-        """Fixture for a watermarked link to an office document."""
-        return ShareLink.objects.create(
-            document=office_document,
-            created_by=user,
-            enable_watermark=True,
-            watermark_text="Office Confidential",
-            allow_download=True
-        )
-
-    @pytest.fixture
-    def watermarked_image_link(self, image_document_with_content, user):
-        """Fixture for a watermarked link to an image document."""
-        return ShareLink.objects.create(
-            document=image_document_with_content,
-            created_by=user,
-            enable_watermark=True,
-            watermark_text="Image Confidential",
-            allow_download=True
-        )
 
     @patch('sharelinks.views.requests.get')
     @patch('sharelinks.views.fileserver_client.generate_download_url')
@@ -3659,60 +3365,6 @@ class TestWatermarkingViews:
             # Since it falls back to vector watermarking, poppler convert_from_bytes should NOT be called
             mock_convert.assert_not_called()
 
-    @patch('sharelinks.views.requests.get')
-    @patch('sharelinks.views.fileserver_client.generate_download_url')
-    def test_download_watermarked_office_file_as_pdf(self, mock_fs_download_url, mock_requests_get, public_client, watermarked_office_link):
-        """Test that a watermarked office doc is generated as a PDF for download with the correct extension."""
-        mock_fs_download_url.return_value = "/files/download/token"
-        pdf_content = b'%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000010 00000 n \n0000000059 00000 n \n0000000112 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF'
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.content = pdf_content
-        mock_requests_get.return_value = mock_response
-
-        document = watermarked_office_link.document
-        assert document.name.endswith('.docx')
-
-        url = f'/api/v1/links/{watermarked_office_link.slug}/download-file/'
-        response = public_client.get(url, REMOTE_ADDR='192.168.1.1')
-
-        assert response.status_code == status.HTTP_200_OK
-        assert response.get('Content-Type') == 'application/pdf'
-        assert 'attachment; filename="Test_Office.pdf"' in response.get('Content-Disposition')
-        mock_fs_download_url.assert_called_once_with(document.versions.get(is_primary=True).storage_key, is_internal=True)
-
-    @patch('sharelinks.views.requests.get')
-    @patch('sharelinks.views.fileserver_client.generate_download_url')
-    def test_download_watermarked_image_file_success(self, mock_fs_download_url, mock_requests_get, public_client, watermarked_image_link):
-        """Test that a watermarked image is generated as a JPEG for download with the correct extension."""
-        mock_fs_download_url.return_value = "/files/download/token"
-        # Simulate a 1x1 transparent GIF being downloaded from storage
-        img_content = (
-            b'GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00'
-            b'!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01'
-            b'\x00\x00\x02\x02D\x01\x00;'
-        )
-
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.content = img_content
-        mock_requests_get.return_value = mock_response
-
-        document = watermarked_image_link.document
-        assert document.name.endswith('.gif')
-
-        url = f'/api/v1/links/{watermarked_image_link.slug}/download-file/'
-        response = public_client.get(url, REMOTE_ADDR='192.168.1.1')
-
-        assert response.status_code == status.HTTP_200_OK
-        assert response.get('Content-Type') == 'image/jpeg'
-        assert 'attachment; filename="test_image.jpg"' in response.get('Content-Disposition')
-        
-        # Verify the generated image is valid
-        try:
-            Image.open(BytesIO(response.content))
-        except Exception:
-            pytest.fail("The response content is not a valid image.")
 
     def test_download_watermarked_file_not_allowed(self, public_client, watermarked_link):
         """Test that downloading is forbidden if allow_download is false."""
@@ -3725,31 +3377,6 @@ class TestWatermarkingViews:
         assert response.status_code == status.HTTP_403_FORBIDDEN
         assert "not allowed for this item" in response.data['message']
 
-    def test_download_video_with_watermark_enabled_returns_403(self, public_client, document_with_page):
-        """
-        Test that downloading a video is blocked (403 Forbidden) if watermarking
-        is enabled on the link.
-        """
-        # Change the document to a video
-        document_with_page.type = 'video'
-        document_with_page.save()
-
-        # Create a share link with watermarking enabled.
-        # We bypass serializer validation by creating the model instance directly in test setup
-        # to simulate a dataroom link or admin update scenario.
-        link = ShareLink.objects.create(
-            document=document_with_page,
-            created_by=document_with_page.created_by,
-            enable_watermark=True,
-            watermark_text="CONFIDENTIAL",
-            allow_download=True
-        )
-
-        url = f'/api/v1/links/{link.slug}/download-file/'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert "not allowed for this item" in response.data['message']
 
     def test_download_file_watermark_blocked_when_exceeds_size_limit(self, public_client, watermarked_link):
         """
@@ -4122,27 +3749,6 @@ class TestWatermarkingViews:
         assert response.status_code == status.HTTP_403_FORBIDDEN
         assert "not allowed for this item" in response.data['message']
 
-    def test_download_watermarked_video_from_dataroom_fails(self, public_client, dataroom_with_watermarked_link):
-        """Test that downloading a video from a watermarked dataroom is blocked (403 Forbidden)."""
-        link = dataroom_with_watermarked_link['link']
-        document = dataroom_with_watermarked_link['document']
-        ddoc = dataroom_with_watermarked_link['ddoc']
-
-        # Change document type to video
-        document.type = 'video'
-        document.save()
-
-        # Ensure the dataroom setting inherits enable_watermark=True and allow_download=True
-        setting = link.dataroom_settings.get(dataroom_document=ddoc)
-        setting.allow_download = True
-        setting.enable_watermark = True
-        setting.save()
-
-        url = f'/api/v1/links/{link.slug}/download-file/?dataroom_document_id={ddoc.id}'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert "not allowed for this item" in response.data['message']
 
     def test_download_watermarked_file_from_dataroom_missing_doc_id(self, public_client, dataroom_with_watermarked_link):
         """Test that calling the download endpoint for a dataroom link without a dataroom_document_id fails."""
@@ -4354,26 +3960,24 @@ class TestWatermarkingViews:
 
 
 @pytest.fixture
-def dataroom_with_content_and_link(dataroom, user, document_factory, image_document_with_content):
+def dataroom_with_content_and_link(dataroom, user, document_factory):
     """
-    Sets up a dataroom with a nested structure, documents of various types,
+    Sets up a dataroom with a nested structure, several PDF documents,
     and a share link.
     """
     # Create folder structure
     root_folder = DataroomFolder.objects.create(dataroom=dataroom, name="Root Folder")
     subfolder = DataroomFolder.objects.create(dataroom=dataroom, name="Subfolder", parent=root_folder)
 
-    # Create documents of different types
+    # Create documents
     doc_pdf = document_factory(name="Doc A.pdf", type='pdf')
-    doc_office = document_factory(name="Doc B.docx", type='document')
-    doc_image = image_document_with_content
+    doc_office = document_factory(name="Doc B.pdf", type='pdf')
     invisible_doc = document_factory(name="Invisible.pdf", type='pdf')
     not_downloadable_doc = document_factory(name="Not Downloadable.pdf", type='pdf')
 
     # Add documents to dataroom
     ddoc_pdf = DataroomDocument.objects.create(dataroom=dataroom, document=doc_pdf, folder=root_folder)
     ddoc_office = DataroomDocument.objects.create(dataroom=dataroom, document=doc_office, folder=subfolder)
-    ddoc_image = DataroomDocument.objects.create(dataroom=dataroom, document=doc_image, folder=root_folder)
     ddoc_invisible = DataroomDocument.objects.create(dataroom=dataroom, document=invisible_doc, folder=root_folder)
     ddoc_not_downloadable = DataroomDocument.objects.create(dataroom=dataroom, document=not_downloadable_doc, folder=root_folder)
 
@@ -4386,7 +3990,6 @@ def dataroom_with_content_and_link(dataroom, user, document_factory, image_docum
         'subfolder': subfolder,
         'ddoc_pdf': ddoc_pdf,
         'ddoc_office': ddoc_office,
-        'ddoc_image': ddoc_image,
         'ddoc_invisible': ddoc_invisible,
         'ddoc_not_downloadable': ddoc_not_downloadable,
     }
@@ -4394,34 +3997,6 @@ def dataroom_with_content_and_link(dataroom, user, document_factory, image_docum
 
 @pytest.mark.django_db
 class TestDataroomFolderDownloadView:
-    @patch('sharelinks.views.requests.get')
-    @patch('sharelinks.views.fileserver_client.generate_download_url')
-    def test_download_folder_success(self, mock_fs_download, mock_requests_get, public_client, dataroom_with_content_and_link):
-        mock_fs_download.return_value = "/files/download/token"
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.content = b"file content"
-        mock_requests_get.return_value = mock_response
-
-        link = dataroom_with_content_and_link['link']
-        root_folder = dataroom_with_content_and_link['root_folder']
-
-        url = f'/api/v1/links/{link.slug}/download-folder/{root_folder.id}/'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_200_OK
-        assert response['Content-Type'] == 'application/zip'
-        assert 'attachment; filename="Root_Folder.zip"' in response['Content-Disposition']
-
-        content = getattr(response, 'content', None) or b"".join(response.streaming_content)
-        zip_buffer = BytesIO(content)
-        with zipfile.ZipFile(zip_buffer, 'r') as zf:
-            names = zf.namelist()
-            assert 'Root Folder/' in names
-            assert 'Root Folder/Doc A.pdf' in names
-            assert 'Root Folder/test_image.gif' in names
-            assert 'Root Folder/Subfolder/' in names
-            assert 'Root Folder/Subfolder/Doc B.docx' in names
 
     @patch('sharelinks.views.requests.get')
     @patch('sharelinks.views.fileserver_client.generate_download_url')
@@ -4558,73 +4133,6 @@ class TestDataroomFolderDownloadView:
             content = zf.read('Root Folder/Doc A.pdf')
             assert content == b"watermarked pdf content"
 
-    @patch('sharelinks.views._generate_watermarked_pdf')
-    def test_zip_archive_includes_watermarked_office_file_as_pdf(self, mock_generate_pdf, public_client, dataroom_with_content_and_link):
-        """Tests that a watermarked Office doc inside a folder download has the correct .pdf extension."""
-        link = dataroom_with_content_and_link['link']
-        root_folder = dataroom_with_content_and_link['root_folder']
-        ddoc_office = dataroom_with_content_and_link['ddoc_office']
-        # Office doc needs its converted PDF key set
-        version = ddoc_office.document.versions.get(is_primary=True)
-        version.storage_key = "path/to/converted_office.pdf"
-        version.save()
-
-        link.enable_watermark = True
-        link.watermark_text = "TEST"
-        link.save()
-
-        setting_office = link.dataroom_settings.get(dataroom_document=ddoc_office)
-        setting_office.enable_watermark = True
-        setting_office.save()
-
-        mock_generate_pdf.return_value = BytesIO(b"watermarked office content")
-
-        url = f'/api/v1/links/{link.slug}/download-folder/{root_folder.id}/'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_200_OK
-        content = getattr(response, 'content', None) or b"".join(response.streaming_content)
-        mock_generate_pdf.assert_called_once()
-
-        zip_buffer = BytesIO(content)
-        with zipfile.ZipFile(zip_buffer, 'r') as zf:
-            names = zf.namelist()
-            assert 'Root Folder/Subfolder/Doc B.pdf' in names
-            assert 'Root Folder/Subfolder/Doc B.docx' not in names
-            content = zf.read('Root Folder/Subfolder/Doc B.pdf')
-            assert content == b"watermarked office content"
-
-    @patch('sharelinks.views._generate_watermarked_image')
-    def test_zip_archive_includes_watermarked_image(self, mock_generate_image, public_client, dataroom_with_content_and_link):
-        """Tests that a watermarked image inside a folder download has the correct .jpg extension."""
-        link = dataroom_with_content_and_link['link']
-        root_folder = dataroom_with_content_and_link['root_folder']
-        ddoc_image = dataroom_with_content_and_link['ddoc_image']
-
-        link.enable_watermark = True
-        link.watermark_text = "TEST"
-        link.save()
-
-        setting_image = link.dataroom_settings.get(dataroom_document=ddoc_image)
-        setting_image.enable_watermark = True
-        setting_image.save()
-
-        mock_generate_image.return_value = (BytesIO(b"watermarked image content"), 'image/jpeg')
-
-        url = f'/api/v1/links/{link.slug}/download-folder/{root_folder.id}/'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_200_OK
-        content = getattr(response, 'content', None) or b"".join(response.streaming_content)
-        mock_generate_image.assert_called_once()
-
-        zip_buffer = BytesIO(content)
-        with zipfile.ZipFile(zip_buffer, 'r') as zf:
-            names = zf.namelist()
-            assert 'Root Folder/test_image.jpg' in names
-            assert 'Root Folder/test_image.gif' not in names
-            content = zf.read('Root Folder/test_image.jpg')
-            assert content == b"watermarked image content"
 
     @patch('sharelinks.views.requests.get')
     @patch('sharelinks.views.fileserver_client.generate_download_url')
@@ -4792,81 +4300,6 @@ class TestDataroomFolderDownloadView:
         assert not DataroomVisit.objects.filter(view_session=session).exists()
         mock_dispatch.assert_not_called()
 
-    def test_view_data_document_in_hidden_folder_denied(self, public_client, dataroom_with_content_and_link):
-        """
-        Verify that fetching document view data is denied when its parent folder is not visible.
-        """
-        link = dataroom_with_content_and_link['link']
-        subfolder = dataroom_with_content_and_link['subfolder']
-        ddoc_office = dataroom_with_content_and_link['ddoc_office']
-
-        sub_setting = link.dataroom_settings.get(dataroom_folder=subfolder)
-        sub_setting.is_visible = False
-        sub_setting.save()
-
-        doc_setting = link.dataroom_settings.get(dataroom_document=ddoc_office)
-        doc_setting.is_visible = True
-        doc_setting.save()
-
-        url = f'/api/v1/links/{link.slug}/view-data/?dataroom_document_id={ddoc_office.id}'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_page_view_document_in_hidden_folder_denied(self, public_client, dataroom_with_content_and_link):
-        """
-        Verify that page view rendering is denied when the document resides in a hidden folder.
-        """
-        link = dataroom_with_content_and_link['link']
-        subfolder = dataroom_with_content_and_link['subfolder']
-        ddoc_office = dataroom_with_content_and_link['ddoc_office']
-
-        session = public_client.session
-        session['authorized_share_links'] = {
-            str(link.id): {'password_verified': True, 'email_verified': True}
-        }
-        session.save()
-
-        sub_setting = link.dataroom_settings.get(dataroom_folder=subfolder)
-        sub_setting.is_visible = False
-        sub_setting.save()
-
-        doc_setting = link.dataroom_settings.get(dataroom_document=ddoc_office)
-        doc_setting.is_visible = True
-        doc_setting.save()
-
-        url = f'/api/v1/links/{link.slug}/page/1/?dataroom_document_id={ddoc_office.id}'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-
-    def test_file_download_document_in_hidden_folder_denied(self, public_client, dataroom_with_content_and_link):
-        """
-        Verify that direct file download is denied when the document resides in a hidden folder.
-        """
-        link = dataroom_with_content_and_link['link']
-        subfolder = dataroom_with_content_and_link['subfolder']
-        ddoc_office = dataroom_with_content_and_link['ddoc_office']
-
-        session = public_client.session
-        session['authorized_share_links'] = {
-            str(link.id): {'password_verified': True, 'email_verified': True}
-        }
-        session.save()
-
-        sub_setting = link.dataroom_settings.get(dataroom_folder=subfolder)
-        sub_setting.is_visible = False
-        sub_setting.save()
-
-        doc_setting = link.dataroom_settings.get(dataroom_document=ddoc_office)
-        doc_setting.is_visible = True
-        doc_setting.allow_download = True
-        doc_setting.save()
-
-        url = f'/api/v1/links/{link.slug}/download-file/?dataroom_document_id={ddoc_office.id}'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_is_dataroom_folder_path_visible_only_queries_ancestor_path(self, dataroom_with_content_and_link):
         """
@@ -4894,24 +4327,6 @@ class TestDataroomFolderDownloadView:
         # Must NOT load all folders in the dataroom via DataroomFolder.objects.filter(dataroom=...)
         assert not any(f'FROM "{folder_table}" WHERE' in q for q in queries)
 
-    def test_view_data_single_document_does_not_scan_all_folders(self, public_client, dataroom_with_content_and_link):
-        """
-        Verify that fetching single document view-data builds breadcrumbs using
-        the prefetched folder hierarchy without scanning all dataroom folders.
-        """
-        link = dataroom_with_content_and_link['link']
-        ddoc_office = dataroom_with_content_and_link['ddoc_office']
-
-        with CaptureQueriesContext(connection) as ctx:
-            response = public_client.get(f'/api/v1/links/{link.slug}/view-data/?dataroom_document_id={ddoc_office.id}')
-
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert len(data['dataroom_context']['breadcrumbs']) > 0
-        queries = [q['sql'] for q in ctx.captured_queries]
-        folder_table = DataroomFolder._meta.db_table
-        # Must NOT perform full-table scan of dataroom_folders
-        assert not any(f'FROM "{folder_table}" WHERE' in q for q in queries)
 
     def test_view_data_catalog_root_does_not_scan_all_folders(self, public_client, dataroom_with_content_and_link):
         """
@@ -5064,6 +4479,101 @@ class TestDataroomFolderDownloadView:
         owner_resp_get = api_client.get(f'/api/v1/share-links/{link.id}/')
         assert owner_resp_get.status_code == status.HTTP_200_OK
         assert owner_resp_get.data['name'] == "Collab Dataroom Link"
+
+    def test_view_data_document_in_hidden_folder_denied(self, public_client, dataroom_with_content_and_link):
+        """
+        Verify that fetching document view data is denied when its parent folder is not visible.
+        """
+        link = dataroom_with_content_and_link['link']
+        subfolder = dataroom_with_content_and_link['subfolder']
+        ddoc_office = dataroom_with_content_and_link['ddoc_office']
+
+        sub_setting = link.dataroom_settings.get(dataroom_folder=subfolder)
+        sub_setting.is_visible = False
+        sub_setting.save()
+
+        doc_setting = link.dataroom_settings.get(dataroom_document=ddoc_office)
+        doc_setting.is_visible = True
+        doc_setting.save()
+
+        url = f'/api/v1/links/{link.slug}/view-data/?dataroom_document_id={ddoc_office.id}'
+        response = public_client.get(url)
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_page_view_document_in_hidden_folder_denied(self, public_client, dataroom_with_content_and_link):
+        """
+        Verify that page view rendering is denied when the document resides in a hidden folder.
+        """
+        link = dataroom_with_content_and_link['link']
+        subfolder = dataroom_with_content_and_link['subfolder']
+        ddoc_office = dataroom_with_content_and_link['ddoc_office']
+
+        session = public_client.session
+        session['authorized_share_links'] = {
+            str(link.id): {'password_verified': True, 'email_verified': True}
+        }
+        session.save()
+
+        sub_setting = link.dataroom_settings.get(dataroom_folder=subfolder)
+        sub_setting.is_visible = False
+        sub_setting.save()
+
+        doc_setting = link.dataroom_settings.get(dataroom_document=ddoc_office)
+        doc_setting.is_visible = True
+        doc_setting.save()
+
+        url = f'/api/v1/links/{link.slug}/page/1/?dataroom_document_id={ddoc_office.id}'
+        response = public_client.get(url)
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_file_download_document_in_hidden_folder_denied(self, public_client, dataroom_with_content_and_link):
+        """
+        Verify that direct file download is denied when the document resides in a hidden folder.
+        """
+        link = dataroom_with_content_and_link['link']
+        subfolder = dataroom_with_content_and_link['subfolder']
+        ddoc_office = dataroom_with_content_and_link['ddoc_office']
+
+        session = public_client.session
+        session['authorized_share_links'] = {
+            str(link.id): {'password_verified': True, 'email_verified': True}
+        }
+        session.save()
+
+        sub_setting = link.dataroom_settings.get(dataroom_folder=subfolder)
+        sub_setting.is_visible = False
+        sub_setting.save()
+
+        doc_setting = link.dataroom_settings.get(dataroom_document=ddoc_office)
+        doc_setting.is_visible = True
+        doc_setting.allow_download = True
+        doc_setting.save()
+
+        url = f'/api/v1/links/{link.slug}/download-file/?dataroom_document_id={ddoc_office.id}'
+        response = public_client.get(url)
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_view_data_single_document_does_not_scan_all_folders(self, public_client, dataroom_with_content_and_link):
+        """
+        Verify that fetching single document view-data builds breadcrumbs using
+        the prefetched folder hierarchy without scanning all dataroom folders.
+        """
+        link = dataroom_with_content_and_link['link']
+        ddoc_office = dataroom_with_content_and_link['ddoc_office']
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = public_client.get(f'/api/v1/links/{link.slug}/view-data/?dataroom_document_id={ddoc_office.id}')
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert len(data['dataroom_context']['breadcrumbs']) > 0
+        queries = [q['sql'] for q in ctx.captured_queries]
+        folder_table = DataroomFolder._meta.db_table
+        # Must NOT perform full-table scan of dataroom_folders
+        assert not any(f'FROM "{folder_table}" WHERE' in q for q in queries)
 
 
 @pytest.mark.django_db
@@ -5226,48 +4736,6 @@ class TestDataroomDownloadAllView:
     Tests for GET /api/v1/links/<slug>/download-dataroom/ whole-dataroom streaming downloads.
     """
 
-    @patch('sharelinks.views.requests.get')
-    @patch('sharelinks.views.fileserver_client.generate_download_url')
-    def test_download_dataroom_success(
-        self, mock_fs_download, mock_requests_get, public_client, dataroom_with_content_and_link, document_factory
-    ):
-        mock_fs_download.return_value = "/files/download/token"
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.content = b"file content"
-        mock_requests_get.return_value = mock_response
-
-        link = dataroom_with_content_and_link['link']
-        dataroom = link.dataroom
-        dataroom.name = "Test Dataroom"
-        dataroom.save()
-
-        # Add a root-level document (folder=None)
-        root_doc = document_factory(name="Root Doc.txt", type='text')
-        ddoc_root = DataroomDocument.objects.create(dataroom=dataroom, document=root_doc, folder=None)
-        setting_root = link.dataroom_settings.get(dataroom_document=ddoc_root)
-        setting_root.is_visible = True
-        setting_root.allow_download = True
-        setting_root.save()
-
-        url = f'/api/v1/links/{link.slug}/download-dataroom/'
-        response = public_client.get(url)
-
-        assert response.status_code == status.HTTP_200_OK
-        assert response['Content-Type'] == 'application/zip'
-        assert 'attachment; filename="Test_Dataroom.zip"' in response['Content-Disposition']
-
-        content = getattr(response, 'content', None) or b"".join(response.streaming_content)
-        zip_buffer = BytesIO(content)
-        with zipfile.ZipFile(zip_buffer, 'r') as zf:
-            names = zf.namelist()
-            assert 'Test Dataroom/' in names
-            assert 'Test Dataroom/Root Folder/' in names
-            assert 'Test Dataroom/Root Folder/Doc A.pdf' in names
-            assert 'Test Dataroom/Root Folder/test_image.gif' in names
-            assert 'Test Dataroom/Root Folder/Subfolder/' in names
-            assert 'Test Dataroom/Root Folder/Subfolder/Doc B.docx' in names
-            assert 'Test Dataroom/Root Doc.txt' in names
 
     def test_download_dataroom_permission_denied_when_link_download_disabled(self, public_client, dataroom_with_content_and_link):
         link = dataroom_with_content_and_link['link']
@@ -5537,7 +5005,7 @@ class TestDataroomDownloadAllView:
             assert any('Doc A.pdf' in n for n in names)
             # The non-downloadable subfolder and its contents must be excluded
             assert not any('Subfolder' in n for n in names)
-            assert not any('Doc_B.docx' in n for n in names)
+            assert not any('Doc B.pdf' in n for n in names)
 
     @patch('sharelinks.views.requests.get')
     @patch('sharelinks.views.fileserver_client.generate_download_url')
@@ -6007,93 +5475,6 @@ class TestDataroomDownloadAllView:
                 assert secret_token not in str(arg)
                 assert "http://core:8080" not in str(arg)
 
-    @patch('sharelinks.views._generate_watermarked_pdf')
-    def test_download_dataroom_skips_unwatermarkable_types_and_unconverted_docs(
-        self, mock_generate_pdf, public_client, dataroom, user, document_factory
-    ):
-        # Setup dataroom with watermark enabled
-        link = ShareLink.objects.create(dataroom=dataroom, created_by=user, enable_watermark=True, watermark_text="CONF")
-
-        # 1. Valid PDF
-        doc_valid = document_factory(name="Valid.pdf", type='pdf')
-        DataroomDocument.objects.create(dataroom=dataroom, document=doc_valid)
-
-        # 2. Spreadsheet (cannot be watermarked on download, must be skipped)
-        doc_spreadsheet = document_factory(name="Financials.xlsx", type='spreadsheet')
-        DataroomDocument.objects.create(dataroom=dataroom, document=doc_spreadsheet)
-
-        # 3. Office document without converted PDF storage_key (cannot be watermarked, must be skipped)
-        doc_office_unconverted = document_factory(name="Unconverted.docx", type='document')
-        v_office = doc_office_unconverted.versions.filter(is_primary=True).first()
-        v_office.storage_key = ""  # No converted PDF
-        v_office.save()
-        DataroomDocument.objects.create(dataroom=dataroom, document=doc_office_unconverted)
-
-        # 4. Office document with converted PDF storage_key (can be watermarked, must be included)
-        doc_office_converted = document_factory(name="Converted.docx", type='document')
-        v_conv = doc_office_converted.versions.filter(is_primary=True).first()
-        v_conv.storage_key = "path/to/converted.pdf"
-        v_conv.save()
-        DataroomDocument.objects.create(dataroom=dataroom, document=doc_office_converted)
-
-        mock_generate_pdf.return_value = BytesIO(b"watermarked-pdf-content")
-
-        url = f'/api/v1/links/{link.slug}/download-dataroom/'
-        response = public_client.get(url)
-        assert response.status_code == status.HTTP_200_OK
-
-        content = getattr(response, 'content', None) or b"".join(response.streaming_content)
-        with zipfile.ZipFile(BytesIO(content), 'r') as zf:
-            names = zf.namelist()
-            # Valid PDF was included
-            assert any('Valid.pdf' in n for n in names)
-            # Converted office document was included as PDF
-            assert any('Converted.pdf' in n for n in names)
-            # Spreadsheet was skipped
-            assert not any('Financials' in n for n in names)
-            # Unconverted document was skipped
-            assert not any('Unconverted' in n for n in names)
-
-    @patch('sharelinks.views.requests.get')
-    @patch('sharelinks.views.fileserver_client.generate_download_url')
-    def test_download_dataroom_skips_keyless_doc_without_reserving_name(
-        self, mock_fs_download, mock_requests_get, public_client, dataroom_with_content_and_link, document_factory
-    ):
-        mock_fs_download.return_value = "/files/download/token"
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.content = b"content"
-        mock_requests_get.return_value = mock_response
-
-        link = dataroom_with_content_and_link['link']
-        dataroom = link.dataroom
-        link.enable_watermark = False
-        link.save()
-
-        # Doc 1: has empty original_storage_key
-        doc_keyless = document_factory(name="DocKeyless.pdf", type="document")
-        v1 = doc_keyless.versions.filter(is_primary=True).first()
-        v1.original_storage_key = ""
-        v1.save()
-        DataroomDocument.objects.create(dataroom=dataroom, document=doc_keyless, name="Important.pdf")
-
-        # Doc 2: has same dataroom display name but valid original_storage_key
-        doc_valid = document_factory(name="DocValid.pdf", type="document")
-        v2 = doc_valid.versions.filter(is_primary=True).first()
-        v2.original_storage_key = "path/to/important.pdf"
-        v2.save()
-        DataroomDocument.objects.create(dataroom=dataroom, document=doc_valid, name="Important.pdf")
-
-        url = f'/api/v1/links/{link.slug}/download-dataroom/'
-        response = public_client.get(url)
-        assert response.status_code == status.HTTP_200_OK
-
-        content = getattr(response, 'content', None) or b"".join(response.streaming_content)
-        with zipfile.ZipFile(BytesIO(content), 'r') as zf:
-            names = zf.namelist()
-            # The valid document MUST get Important.pdf directly, NOT Important (1).pdf
-            assert any(n.endswith('/Important.pdf') or n == 'Important.pdf' for n in names)
-            assert not any('(1)' in n for n in names)
 
     @patch('sharelinks.views.requests.get')
     @patch('sharelinks.views.fileserver_client.generate_download_url')
@@ -6143,33 +5524,11 @@ class TestDataroomDownloadAllView:
         assert "%2F" in cd_header
 
 
-class TestWatermarkErrorLoggingAndSizeLimit:
-    def test_generate_watermarked_image_logs_exception_type_without_leaking_url(self, caplog, document_factory):
-        from sharelinks.views import _generate_watermarked_image, WatermarkingError
-        import logging
-        doc = document_factory(name="test.jpg", type="image")
-        version = doc.versions.filter(is_primary=True).first()
-        version.file_size = 1000
-        version.storage_key = "test_key.jpg"
-        version.save()
-
-        secret_token = "secret-hmac-token-12345"
-        sensitive_url = f"http://core:8080/files/download/{secret_token}"
-
-        with patch('sharelinks.views.fileserver_client.generate_download_url', return_value=sensitive_url):
-            with patch('sharelinks.views.requests.get', side_effect=requests.HTTPError(f"403 Client Error: Forbidden for url: {sensitive_url}")):
-                with caplog.at_level(logging.ERROR):
-                    with pytest.raises(WatermarkingError):
-                        _generate_watermarked_image(doc, version, "Watermark", None, "viewer@test.com")
-
-        assert secret_token not in caplog.text
-        assert sensitive_url not in caplog.text
-        assert "Failed to apply watermark to image: HTTPError" in caplog.text
-
+class TestWatermarkErrorLogging:
     def test_generate_watermarked_pdf_logs_exception_type_without_leaking_url(self, caplog, document_factory):
         from sharelinks.views import _generate_watermarked_pdf, WatermarkingError
         import logging
-        doc = document_factory(name="test.pdf", type="document")
+        doc = document_factory(name="test.pdf", type="pdf")
         version = doc.versions.filter(is_primary=True).first()
         version.file_size = 1000
         version.storage_key = "test_key.pdf"
@@ -6187,20 +5546,3 @@ class TestWatermarkErrorLoggingAndSizeLimit:
         assert secret_token not in caplog.text
         assert sensitive_url not in caplog.text
         assert "Failed to apply watermark to PDF: HTTPError" in caplog.text
-
-    def test_watermark_generation_blocked_when_max_size_zero(self, document_factory):
-        from sharelinks.views import _generate_watermarked_image, _generate_watermarked_pdf, WatermarkingError
-        doc = document_factory(name="small.jpg", type="image")
-        version = doc.versions.filter(is_primary=True).first()
-        version.file_size = 100  # 100 bytes
-        version.storage_key = "small.jpg"
-        version.save()
-
-        with patch('sharelinks.views.get_max_watermark_file_size_mb', return_value=0):
-            with pytest.raises(WatermarkingError, match="exceeds the maximum limit"):
-                _generate_watermarked_image(doc, version, "Watermark", None, "viewer@test.com")
-
-            with pytest.raises(WatermarkingError, match="exceeds the maximum limit"):
-                _generate_watermarked_pdf(doc, version, "Watermark", None, "viewer@test.com")
-
-

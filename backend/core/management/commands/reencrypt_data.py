@@ -7,12 +7,10 @@ Purpose:
 
 When to Use:
     Execute this command immediately after updating SECRET_KEY in your environment (.env).
-    Without re-encryption, existing encrypted secrets (share link passwords, cloud OAuth tokens,
-    and webhook signing secrets) cannot be decrypted by the application using the new secret key.
+    Without re-encryption, existing encrypted secrets (share link passwords and webhook signing secrets) cannot be decrypted by the application using the new secret key.
 
 Encrypted Models & Fields Covered:
     - sharelinks.ShareLink: password (public share link passwords)
-    - cloudfiles.CloudConnection: access_token, refresh_token (OAuth storage credentials)
     - automations.AutomationDestination: signing_secret (HMAC webhook signature secrets)
 
 Usage Examples:
@@ -45,7 +43,6 @@ from django_cryptography.core.signing import FernetSigner
 from django_cryptography.utils.crypto import FernetBytes, InvalidToken
 
 from automations.models import AutomationDestination
-from cloudfiles.models import CloudConnection
 from sharelinks.models import ShareLink
 
 
@@ -55,7 +52,6 @@ class Command(BaseCommand):
     # Explicit list of models and their encrypted fields in Coneshare
     MODELS_AND_FIELDS = [
         (ShareLink, ["password"]),
-        (CloudConnection, ["access_token", "refresh_token"]),
         (AutomationDestination, ["signing_secret"]),
     ]
 

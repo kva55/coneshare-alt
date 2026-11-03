@@ -158,63 +158,27 @@ class DocumentPageSerializer(serializers.ModelSerializer):
 
 class DocumentVersionSerializer(serializers.ModelSerializer):
     pages = DocumentPageSerializer(many=True, read_only=True)
-    cloud_import = serializers.SerializerMethodField()
 
     class Meta:
         model = DocumentVersion
         fields = [
             'id', 'version_number', 'file_size', 'num_pages',
             'is_primary', 'has_pages', 'render_status', 'render_error',
-            'pages', 'cloud_import', 'created_at'
+            'pages', 'created_at'
         ]
         read_only_fields = fields
-
-    @extend_schema_field(serializers.DictField(allow_null=True))
-    def get_cloud_import(self, obj) -> dict:
-        """
-        Exposes display-safe cloud import details. Raw metadata is filtered
-        to prevent leaking sensitive connection details (e.g. connection_id).
-        """
-        if isinstance(obj.metadata, dict):
-            ci = obj.metadata.get('cloud_import')
-            if isinstance(ci, dict):
-                return {
-                    'provider': ci.get('provider'),
-                    'provider_display': ci.get('provider_display'),
-                    'file_name': ci.get('file_name'),
-                    'file_path': ci.get('file_path') or ci.get('file_id'),
-                }
-        return None
 
 
 class DocumentVersionListSerializer(serializers.ModelSerializer):
-    cloud_import = serializers.SerializerMethodField()
 
     class Meta:
         model = DocumentVersion
         fields = [
             'id', 'version_number', 'file_size', 'num_pages',
             'is_primary', 'has_pages', 'render_status', 'render_error',
-            'cloud_import', 'created_at'
+            'created_at'
         ]
         read_only_fields = fields
-
-    @extend_schema_field(serializers.DictField(allow_null=True))
-    def get_cloud_import(self, obj) -> dict:
-        """
-        Exposes display-safe cloud import details. Raw metadata is filtered
-        to prevent leaking sensitive connection details (e.g. connection_id).
-        """
-        if isinstance(obj.metadata, dict):
-            ci = obj.metadata.get('cloud_import')
-            if isinstance(ci, dict):
-                return {
-                    'provider': ci.get('provider'),
-                    'provider_display': ci.get('provider_display'),
-                    'file_name': ci.get('file_name'),
-                    'file_path': ci.get('file_path') or ci.get('file_id'),
-                }
-        return None
 
 
 class DocumentSerializer(serializers.ModelSerializer):
@@ -222,7 +186,6 @@ class DocumentSerializer(serializers.ModelSerializer):
     share_links = serializers.SerializerMethodField()
     uploader_info = serializers.SerializerMethodField()
     share_link_view_count = serializers.SerializerMethodField()
-    cloud_import = serializers.SerializerMethodField()
     download_only = serializers.BooleanField(source='is_download_only', read_only=True)
     folder = FolderSerializer(read_only=True)
 
@@ -236,7 +199,6 @@ class DocumentSerializer(serializers.ModelSerializer):
             'num_pages', 'file_size', 'download_only', 'assistant_enabled', 'is_starred', 'created_by',
             'created_by_user',
             'created_at', 'updated_at', 'versions', 'share_links', 'uploader_info', 'share_link_view_count',
-            'cloud_import'
         ]
         read_only_fields = [
             'id', 'organization', 'folder', 'status', 'status_message',
@@ -295,27 +257,6 @@ class DocumentSerializer(serializers.ModelSerializer):
 
         from sharelinks.models import ViewSession
         return ViewSession.objects.filter(share_link__document=obj).count()
-
-    @extend_schema_field(serializers.DictField(allow_null=True))
-    def get_cloud_import(self, obj) -> dict:
-        """
-        Exposes display-safe cloud import details from the active primary version.
-        Raw metadata is filtered to prevent leaking sensitive connection details (e.g. connection_id).
-        """
-        # Retrieve the currently active/primary version
-        primary_version = obj.versions.filter(is_primary=True).first()
-        if primary_version and isinstance(primary_version.metadata, dict):
-            ci = primary_version.metadata.get('cloud_import')
-            if isinstance(ci, dict):
-                return {
-                    'provider': ci.get('provider'),
-                    'provider_display': ci.get('provider_display'),
-                    'file_name': ci.get('file_name'),
-                    'file_path': ci.get('file_path') or ci.get('file_id'),
-                    'file_id': ci.get('file_id'),
-                    'etag_or_rev': ci.get('etag_or_rev'),
-                }
-        return None
 
     def validate(self, data):
         data = super().validate(data)

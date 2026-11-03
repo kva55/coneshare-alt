@@ -915,39 +915,9 @@ def test_finalize_nonexistent_destination_path_returns_400(api_client, user):
     assert "Destination folder path" in response.json()['detail']
 
 
-@pytest.mark.django_db
-@override_settings(SITE_DOMAIN="http://test.coneshare.com")
-@patch('documents.views.fileserver_client.generate_download_url')
-def test_get_document_preview_data_for_image_document(
-    mock_fs_download_url, api_client, image_document_with_content
-):
-    """
-    Verify that preview data for an image document returns a temporary URL
-    from the file server.
-    """
-    primary_version = image_document_with_content.versions.get(is_primary=True)
-    mock_fs_download_url.return_value = "http://test.coneshare.com/files/download/some-token"
-
-    url = f'/api/v1/documents/{image_document_with_content.id}/preview-data/'
-    response = api_client.get(url)
-
-    assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    assert data['id'] == str(image_document_with_content.id)
-    assert len(data['pages']) == 1
-
-    page_data = data['pages'][0]
-    expected_url = "http://test.coneshare.com/files/download/some-token"
-    assert page_data['url'] == expected_url
-
-    mock_fs_download_url.assert_called_once_with(
-        primary_version.original_storage_key, is_internal=False, filename=image_document_with_content.name
-    )
-
 
 @pytest.mark.django_db
 @override_settings(SITE_DOMAIN="http://test.coneshare.com")
-@override_settings(PDF_PREVIEW_ENGINE='server_pages')
 @patch('documents.views.fileserver_client.generate_download_url')
 def test_get_document_preview_data_success(mock_fs_download_url, api_client, user):
     """Test successfully retrieving document preview data."""
@@ -982,41 +952,6 @@ def test_get_document_preview_data_success(mock_fs_download_url, api_client, use
     mock_fs_download_url.assert_called_once_with(page.storage_key, is_internal=False)
 
 
-@pytest.mark.django_db
-@patch('documents.fileserver.fileserver_client.generate_download_url')
-def test_get_spreadsheet_document_preview_data_success(mock_fs_download_url, api_client, user):
-    """Test retrieving preview data for a spreadsheet document."""
-    mock_fs_download_url.return_value = "http://test.coneshare.com/files/download/sheet-json"
-    doc = Document.objects.create(
-        organization=user.organization,
-        created_by=user,
-        name="sales.xlsx",
-        type="spreadsheet",
-        num_pages=2,
-        status='ready'
-    )
-    version = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        has_pages=False,
-        num_pages=2,
-        type="spreadsheet",
-        storage_key="documents/1/sales_spreadsheet.json",
-        original_storage_key="documents/1/sales.xlsx",
-        render_status="ready"
-    )
-
-    response = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/')
-
-    assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    assert data['preview_mode'] == 'spreadsheet'
-    assert data['preview_status'] == 'ready'
-    assert data['spreadsheet_preview_url'] == "http://test.coneshare.com/files/download/sheet-json"
-    assert data['num_pages'] == 2
-    mock_fs_download_url.assert_any_call("documents/1/sales_spreadsheet.json", is_internal=False)
-
 
 @pytest.mark.django_db
 def test_get_document_preview_data_permission_denied_for_other_user(api_client, user2):
@@ -1049,7 +984,7 @@ def test_get_document_preview_data_not_ready(api_client, user):
 
 
 @pytest.mark.django_db
-@override_settings(MAX_PREVIEW_PAGES=10, PDF_PREVIEW_ENGINE='server_pages')
+@override_settings(MAX_PREVIEW_PAGES=10)
 def test_get_document_preview_data_too_many_pages(api_client, user):
     """Test preview data reports render failure when preview generation exceeded page limits."""
     doc = Document.objects.create(
@@ -1078,7 +1013,6 @@ def test_get_document_preview_data_too_many_pages(api_client, user):
 
 
 @pytest.mark.django_db
-@override_settings(PDF_PREVIEW_ENGINE='server_pages')
 @patch('documents.views.fileserver_client.delete_file')
 @patch('documents.services.generate_pdf_pages_task.delay')
 def test_post_rebuild_preview(mock_task_delay, mock_delete_file, api_client, user):
@@ -1170,7 +1104,6 @@ def test_rebuild_preview_concurrency_conflict(mock_task_delay, mock_delete_file,
 
 
 @pytest.mark.django_db
-@override_settings(PDF_PREVIEW_ENGINE='server_pages')
 @patch('documents.views.fileserver_client.delete_file')
 @patch('documents.services.generate_pdf_pages_task.delay')
 def test_rebuild_preview_force_override_processing_status(mock_task_delay, mock_delete_file, api_client, user):
@@ -1198,7 +1131,6 @@ def test_rebuild_preview_force_override_processing_status(mock_task_delay, mock_
 
 
 @pytest.mark.django_db
-@override_settings(PDF_PREVIEW_ENGINE='server_pages')
 @patch('documents.views.fileserver_client.delete_file')
 @patch('documents.services.generate_pdf_pages_task.delay')
 def test_rebuild_preview_stale_processing_task_auto_recovers(mock_task_delay, mock_delete_file, api_client, user):
@@ -1230,7 +1162,6 @@ def test_rebuild_preview_stale_processing_task_auto_recovers(mock_task_delay, mo
 
 
 @pytest.mark.django_db
-@override_settings(PDF_PREVIEW_ENGINE='server_pages')
 @patch('documents.views.fileserver_client.delete_file')
 @patch('documents.services.generate_pdf_pages_task.delay')
 def test_enqueue_render_task_stamps_updated_at_preventing_premature_stale_rebuild(mock_task_delay, mock_delete_file, api_client, user):
@@ -1272,7 +1203,6 @@ def test_enqueue_render_task_stamps_updated_at_preventing_premature_stale_rebuil
 
 
 @pytest.mark.django_db
-@override_settings(PDF_PREVIEW_ENGINE='server_pages')
 @patch('documents.views.fileserver_client.delete_file')
 @patch('documents.services.generate_pdf_pages_task.delay')
 def test_rebuild_preview_no_existing_pages(mock_task_delay, mock_delete_file, api_client, user):
@@ -1817,11 +1747,45 @@ class TestQuotaAndSizeTracking:
         user.total_document_size = 0
         user.save()
 
+
+    @patch('documents.views.fileserver_client.generate_upload_url')
+    def test_upload_request_respects_quota(self, mock_fs_upload_url, api_client, user):
+        """Test that the document upload request endpoint rejects uploads that exceed the quota."""
+        api_client.force_authenticate(user=user)
+        mock_fs_upload_url.return_value = "/files/upload/token"
+        user.custom_file_size_quota_mb = 1
+        user.save()
+
+        # This should fail (2MB > 1MB)
+        request_data_fail = {'file_name': 'large.pdf', 'file_size': 2 * 1024 * 1024}
+        response_fail = api_client.post('/api/v1/uploads/document/request/', request_data_fail)
+        assert response_fail.status_code == status.HTTP_400_BAD_REQUEST
+        assert "exceed your storage quota" in response_fail.data['detail']
+
+        # This should succeed (0.5MB < 1MB)
+        request_data_ok = {'file_name': 'small.pdf', 'file_size': 512 * 1024}
+        response_ok = api_client.post('/api/v1/uploads/document/request/', request_data_ok)
+        assert response_ok.status_code == status.HTTP_200_OK
+
+    @patch('documents.views.fileserver_client.generate_upload_url')
+    def test_upload_request_nonexistent_folder_path_returns_400(self, mock_fs_upload_url, api_client, user):
+        """Test that requesting upload with a non-existent folder path returns HTTP 400."""
+        api_client.force_authenticate(user=user)
+        mock_fs_upload_url.return_value = "/files/upload/token"
+
+        request_data = {
+            'file_name': 'doc.pdf',
+            'file_size': 1024,
+            'path': 'NonExistentFolder/doc.pdf'
+        }
+        response = api_client.post('/api/v1/uploads/document/request/', request_data)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Folder path 'NonExistentFolder' does not exist." in response.data['detail']
+
     @patch('documents.views.fileserver_client.get_file_info')
     @patch('documents.services.generate_pdf_pages_task.delay')
-    @patch('documents.services.convert_office_to_pdf_task.delay')
     @patch('documents.views.fileserver_client.generate_upload_url')
-    def test_document_lifecycle_updates_user_size(self, mock_fs_upload_url, mock_convert_task, mock_pdf_task, mock_fs_get_file_info, api_client, user):
+    def test_document_lifecycle_updates_user_size(self, mock_fs_upload_url, mock_pdf_task, mock_fs_get_file_info, api_client, user):
         """
         Test that creating, versioning, and deleting documents correctly updates
         the user's total_document_size.
@@ -1869,116 +1833,6 @@ class TestQuotaAndSizeTracking:
         api_client.delete(f'/api/v1/trash/{doc.id}/permanent/')
         user.refresh_from_db()
         assert user.total_document_size == 0
-
-    @patch('documents.views.fileserver_client.generate_upload_url')
-    def test_upload_request_respects_quota(self, mock_fs_upload_url, api_client, user):
-        """Test that the document upload request endpoint rejects uploads that exceed the quota."""
-        api_client.force_authenticate(user=user)
-        mock_fs_upload_url.return_value = "/files/upload/token"
-        user.custom_file_size_quota_mb = 1
-        user.save()
-
-        # This should fail (2MB > 1MB)
-        request_data_fail = {'file_name': 'large.pdf', 'file_size': 2 * 1024 * 1024}
-        response_fail = api_client.post('/api/v1/uploads/document/request/', request_data_fail)
-        assert response_fail.status_code == status.HTTP_400_BAD_REQUEST
-        assert "exceed your storage quota" in response_fail.data['detail']
-
-        # This should succeed (0.5MB < 1MB)
-        request_data_ok = {'file_name': 'small.pdf', 'file_size': 512 * 1024}
-        response_ok = api_client.post('/api/v1/uploads/document/request/', request_data_ok)
-        assert response_ok.status_code == status.HTTP_200_OK
-
-    @patch('documents.views.fileserver_client.generate_upload_url')
-    def test_upload_request_nonexistent_folder_path_returns_400(self, mock_fs_upload_url, api_client, user):
-        """Test that requesting upload with a non-existent folder path returns HTTP 400."""
-        api_client.force_authenticate(user=user)
-        mock_fs_upload_url.return_value = "/files/upload/token"
-
-        request_data = {
-            'file_name': 'doc.pdf',
-            'file_size': 1024,
-            'path': 'NonExistentFolder/doc.pdf'
-        }
-        response = api_client.post('/api/v1/uploads/document/request/', request_data)
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "Folder path 'NonExistentFolder' does not exist." in response.data['detail']
-
-@pytest.mark.django_db
-@patch('documents.views.fileserver_client.generate_preview_url')
-def test_get_document_preview_data_client_pdf(mock_fs_preview_url, api_client, user):
-    """Test getting preview data for a PDF when PDF.js engine is used."""
-    mock_fs_preview_url.return_value = "https://mock.fileserver/client_pdf.pdf"
-    
-    doc = Document.objects.create(
-        organization=user.organization,
-        created_by=user,
-        name="test_client.pdf",
-        status="ready",
-        type="pdf",
-        content_type="application/pdf",
-        download_only=False,
-    )
-    DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        type="pdf",
-        is_primary=True,
-        original_storage_key="test_client.pdf",
-        render_status="not_generated",
-    )
-
-    with override_settings(PDF_PREVIEW_ENGINE='pdfjs'):
-        response = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/')
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data['preview_mode'] == 'client_pdf'
-    assert data['preview_status'] == 'ready'
-    assert data['pdf_preview_url'] == 'https://mock.fileserver/client_pdf.pdf'
-
-
-@pytest.mark.django_db
-@patch('documents.views.fileserver_client.generate_preview_url')
-def test_get_document_preview_data_video_stream_ttl(mock_fs_preview_url, api_client, user):
-    """Test that video preview URLs are generated with extended TTL based on video length."""
-    mock_fs_preview_url.return_value = "https://mock.fileserver/files/preview/token123"
-
-    doc = Document.objects.create(
-        organization=user.organization,
-        created_by=user,
-        name="test_video.mp4",
-        status="ready",
-        type="video",
-        content_type="video/mp4",
-    )
-    version = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        type="video",
-        is_primary=True,
-        original_storage_key="test_video.mp4",
-        storage_key="org_1/docs/video_hls",
-        render_status="ready",
-        length=18000,  # 5 hours
-    )
-
-    with override_settings(ENABLE_VIDEO_PREVIEW=True):
-        response = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/')
-        assert response.status_code == 200
-        assert response.json()['preview_mode'] == 'video'
-        assert response.json()['video_preview_url'] == "https://mock.fileserver/files/preview/token123/playlist.m3u8"
-        # length 18000 + 3600 = 21600 (> 14400)
-        mock_fs_preview_url.assert_called_with("org_1/docs/video_hls", is_internal=False, expiry_seconds=21600)
-
-        # Short video (e.g. 120s) should fall back to 14400 (4 hours minimum)
-        version.length = 120
-        version.save()
-        mock_fs_preview_url.reset_mock()
-
-        response = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/')
-        assert response.status_code == 200
-        mock_fs_preview_url.assert_called_with("org_1/docs/video_hls", is_internal=False, expiry_seconds=14400)
 
 
 def test_document_status_endpoint(api_client, user, organization):
@@ -2078,51 +1932,6 @@ def test_promote_version_endpoint_wrong_doc(api_client, user, organization):
     )
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
-
-@pytest.mark.django_db
-@patch('documents.views.fileserver_client.generate_download_url')
-@patch('documents.views.fileserver_client.generate_preview_url')
-def test_preview_data_endpoint_with_version_id(mock_preview_url, mock_download_url, api_client, user, organization):
-    """Test retrieving preview data for a specific inactive version."""
-    mock_download_url.return_value = "https://mock.fileserver/v1.pdf"
-    mock_preview_url.return_value = "https://mock.fileserver/client_pdf.pdf"
-
-    doc = Document.objects.create(
-        name="Preview Version Test.pdf",
-        organization=organization,
-        created_by=user,
-        status="ready",
-        file_size=100,
-    )
-    v1 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=1,
-        is_primary=True,
-        file_size=100,
-        content_type="application/pdf",
-        original_storage_key="v1.pdf",
-        storage_key="v1.pdf",
-        type="pdf",
-    )
-    v2 = DocumentVersion.objects.create(
-        document=doc,
-        version_number=2,
-        is_primary=False,
-        file_size=200,
-        content_type="application/pdf",
-        original_storage_key="v2.pdf",
-        storage_key="v2.pdf",
-        type="pdf",
-        render_error="Stale preview failed",
-    )
-
-    with override_settings(PDF_PREVIEW_ENGINE='pdfjs'):
-        # Preview specific version v2 (which is inactive)
-        response = api_client.get(f'/api/v1/documents/{doc.id}/preview-data/?version_id={v2.id}')
-
-    assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    assert data['render_error'] == "Stale preview failed"
 
 
 @pytest.mark.django_db

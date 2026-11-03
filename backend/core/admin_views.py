@@ -24,7 +24,6 @@ from datarooms.models import Dataroom, DataroomCollaborator
 from datarooms.serializers import DataroomSerializer
 from documents.models import Document
 from documents.services import recalculate_user_document_size
-from filerequests.models import SecurityThreatEvent
 from sharelinks.models import ShareLink, ViewSession
 from sharelinks.serializers import ShareLinkSerializer
 from core.services import blacklist_all_user_tokens
@@ -461,66 +460,6 @@ class AdminLoginActivityViewSet(viewsets.ReadOnlyModelViewSet):
         user_id = self.request.query_params.get('user_id')
         if user_id:
             queryset = queryset.filter(user_id=user_id)
-
-        return queryset
-
-
-class SecurityThreatEventSerializer(serializers.ModelSerializer):
-    file_request_slug = serializers.CharField(source='file_request.slug', read_only=True)
-
-    class Meta:
-        model = SecurityThreatEvent
-        fields = [
-            'id',
-            'event_type',
-            'severity',
-            'status',
-            'file_request',
-            'file_request_slug',
-            'storage_key',
-            'file_name',
-            'file_size',
-            'content_type',
-            'uploader_name',
-            'uploader_email',
-            'scanner_engine',
-            'scanner_message',
-            'storage_cleanup_status',
-            'storage_cleanup_at',
-            'storage_cleanup_error',
-            'created_at',
-            'updated_at',
-        ]
-        read_only_fields = fields
-
-
-class AdminSecurityThreatEventViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    API endpoint for admins to view security threat events for file requests.
-    """
-    # Dummy queryset for OpenAPI schema generation to infer lookup field type without executing get_queryset().
-    queryset = SecurityThreatEvent.objects.none()
-    serializer_class = SecurityThreatEventSerializer
-    permission_classes = [IsAuthenticated, IsAdmin, APIKeyTierPermission]
-    pagination_class = AdminPagination
-
-    def get_queryset(self):
-        user = self.request.user
-        queryset = SecurityThreatEvent.objects.filter(
-            organization=user.organization
-        ).select_related('file_request').order_by('-created_at')
-
-        status_value = self.request.query_params.get('status')
-        if status_value:
-            queryset = queryset.filter(status=status_value)
-
-        severity = self.request.query_params.get('severity')
-        if severity:
-            queryset = queryset.filter(severity=severity)
-
-        event_type = self.request.query_params.get('event_type')
-        if event_type:
-            queryset = queryset.filter(event_type=event_type)
 
         return queryset
 

@@ -9,7 +9,6 @@ import uuid
 from typing import Optional, List, Set, Union
 from django.utils import timezone
 
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import F, Q, Sum, Value
@@ -24,24 +23,9 @@ from core.services import get_dynamic_setting
 from .fileserver import fileserver_client
 from .models import Document, DocumentPage, DocumentVersion, Folder
 from .renderers import get_renderer_for_file, normalize_content_type
-from .renderers.constants import (
-    HEIC_EXTENSIONS,
-    HEIC_MIMETYPES,
-    IMAGE_MIMETYPES,
-    MARKDOWN_EXTENSIONS,
-    MARKDOWN_MIMETYPES,
-    OFFICE_MIMETYPES,
-    PDF_MIMETYPE,
-    SPREADSHEET_MIMETYPES,
-    VIDEO_MIMETYPES,
-)
-from .tasks import (
-    convert_office_to_pdf_task,
-    generate_pdf_pages_task,
-    generate_video_stream_task,
-    transcode_heic_image_task,
-)
-SERVER_RENDERABLE_TYPES = {'document', 'pdf'}
+from .renderers.constants import PDF_MIMETYPE
+from .tasks import generate_pdf_pages_task
+SERVER_RENDERABLE_TYPES = {'pdf'}
 
 
 class QuotaExceededError(Exception):
@@ -179,25 +163,11 @@ def recalculate_user_document_size(user: User) -> int:
 
 
 def _get_doc_type_from_content_type(content_type: str, filename: str = '') -> str:
-    """Determines the document type from its MIME type and filename."""
+    """Determines the document type from its MIME type and filename. Only PDFs are previewable."""
     norm_type = normalize_content_type(content_type, filename)
-    if norm_type in MARKDOWN_MIMETYPES:
-        return 'markdown'
-    if filename:
-        ext = os.path.splitext(filename)[1].lower()
-        if ext in MARKDOWN_EXTENSIONS:
-            return 'markdown'
-    if norm_type in SPREADSHEET_MIMETYPES:
-        return 'spreadsheet'
-    elif norm_type in OFFICE_MIMETYPES:
-        return 'document'
-    elif norm_type == PDF_MIMETYPE:
+    if norm_type == PDF_MIMETYPE:
         return 'pdf'
-    elif norm_type in IMAGE_MIMETYPES:
-        return 'image'
-    elif norm_type in VIDEO_MIMETYPES:
-        return 'video'
-    return 'file'  # default
+    return 'file'  # stored, never previewed
 
 
 def _route_document_for_processing(document: Document, version: DocumentVersion, file_size: int, content_type: str):
@@ -523,22 +493,14 @@ logger = logging.getLogger(__name__)
 
 def _collect_version_storage_keys(version: DocumentVersion) -> Set[str]:
     """
-    Collects all physical storage keys associated with a document version,
-    including the original file, converted/playlist file, and HLS streaming directory.
+    Collects all physical storage keys associated with a document version
+    (the original file and any converted file).
     """
     keys = set()
     if version.original_storage_key:
         keys.add(version.original_storage_key)
     if version.storage_key and version.storage_key != version.original_storage_key:
         keys.add(version.storage_key)
-        if version.type == 'video' or version.storage_key.endswith('/playlist.m3u8') or '_hls' in version.storage_key:
-            hls_dir = os.path.dirname(version.storage_key)
-            if hls_dir.endswith('_hls'):
-                keys.add(hls_dir)
-    elif version.type == 'video' and version.original_storage_key:
-        base_path, _ = os.path.splitext(version.original_storage_key)
-        hls_dir = f"{base_path}_hls"
-        keys.add(hls_dir)
     return keys
 
 
@@ -811,90 +773,6 @@ def create_new_document_version(
     return new_version
 
 
-def process_imported_file(document: Document, file_data: dict, version_id=None):
-    """
-    Processes a file downloaded from a cloud service, saves it to storage,
-    and routes it for further processing (e.g., PDF conversion).
-    """
-    file_name = file_data['name']
-    file_content = file_data['content']  # This is an in-memory file
-    file_size = file_data['size']
-    etag_or_rev = file_data.get('etag_or_rev', '')
-
-    content_type, _ = mimetypes.guess_type(file_name)
-    if not content_type:
-        content_type = 'application/octet-stream'
-
-    # 1. Store the file via the file server
-    storage_key = generate_storage_key(document.organization.id, file_name)
-
-    try:
-        upload_url = fileserver_client.generate_upload_url(storage_key)
-        # Ensure we read from the start of the file-like object
-        file_content.seek(0)
-        upload_response = requests.put(upload_url, data=file_content)
-        upload_response.raise_for_status()
-        original_storage_key = storage_key
-    except (APIException, requests.exceptions.RequestException) as e:
-        logger.error(f"Failed to upload imported file to file server for doc {document.id}: {e}")
-        raise
-
-    # 2. Re-check quota with actual size before persisting version storage metadata.
-    user = document.created_by
-    if user:
-        try:
-            check_user_quota_on_upload(
-                user=user,
-                new_file_size=file_size,
-                document_to_update=document if document.file_size else None
-            )
-        except QuotaExceededError as e:
-            logger.warning(
-                f"Cloud import for doc {document.id} failed: quota exceeded with actual file size. "
-                f"User: {user.id}, Size: {file_size}."
-            )
-            # Clean up the file that was just uploaded to our storage
-            try:
-                fileserver_client.delete_file(original_storage_key)
-            except APIException as delete_e:
-                logger.error(f"Failed to clean up file {original_storage_key} after quota error: {delete_e}")
-            raise
-
-    # 3. Update document and version records and route for processing
-    if version_id:
-        version = document.versions.get(id=version_id)
-    else:
-        version = document.versions.get(version_number=1)
-
-    version.original_storage_key = original_storage_key
-    version.storage_key = original_storage_key
-    version.content_type = content_type
-    version.type = _get_doc_type_from_content_type(content_type, document.name)
-    version.file_size = file_size
-    
-    # Store the etag/rev in version metadata
-    if not isinstance(version.metadata, dict):
-        version.metadata = {}
-    if 'cloud_import' in version.metadata:
-        version.metadata['cloud_import']['etag_or_rev'] = etag_or_rev
-
-    old_file_size = document.file_size or 0
-
-    with transaction.atomic():
-        version.save()
-        _route_document_for_processing(
-            document=document,
-            version=version,
-            file_size=file_size,
-            content_type=content_type,
-        )
-        if user and old_file_size != file_size:
-            User.objects.filter(pk=user.pk).update(
-                total_document_size=F('total_document_size') - old_file_size + file_size
-            )
-        touch_folder_ancestors(document.folder)
-
-
 def promote_document_version(document: Document, version: DocumentVersion, requesting_user: User):
     """
     Promotes a specific DocumentVersion to be the active (primary) version of the Document.
@@ -953,13 +831,7 @@ def promote_document_version(document: Document, version: DocumentVersion, reque
         max_size_bytes = max_preview_file_size_mb * 1024 * 1024
         is_too_large = new_file_size > max_size_bytes
 
-        if version.type == 'video':
-            max_video_size_mb = get_dynamic_setting('MAX_VIDEO_PREVIEW_SIZE_MB')
-            max_size_bytes = max_video_size_mb * 1024 * 1024
-            is_too_large = new_file_size > max_size_bytes
-            is_previewable = settings.ENABLE_VIDEO_PREVIEW and not is_too_large
-        else:
-            is_previewable = version.type != 'file' and not is_too_large
+        is_previewable = version.type == 'pdf' and not is_too_large
 
         locked_doc.download_only = not is_previewable
 

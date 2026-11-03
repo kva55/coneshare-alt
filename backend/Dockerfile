@@ -22,14 +22,11 @@ ARG PGID=1000
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
-    libreoffice \
     fonts-noto-cjk \
     supervisor \
     nginx \
     wget \
     curl \
-    nano \
-    ffmpeg \
     procps \
 && rm -rf /var/lib/apt/lists/*
 

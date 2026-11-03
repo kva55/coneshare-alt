@@ -21,10 +21,7 @@ from urllib.parse import urlparse
 from celery.schedules import crontab
 import dj_database_url
 from django.utils.translation import gettext_lazy as _
-import sentry_sdk
 from django.contrib.gis.geoip2 import GeoIP2
-from sentry_sdk.integrations.celery import CeleryIntegration
-from sentry_sdk.integrations.django import DjangoIntegration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -80,13 +77,6 @@ TRUSTED_PROXIES = [
 CORE_API_URL = os.environ.get('CORE_API_URL', 'http://core:8080')
 INTERNAL_API_TOKEN = os.environ.get('INTERNAL_API_TOKEN')
 
-# Malware Scan (ClamAV)
-MALWARE_SCAN_ENABLED = os.environ.get('MALWARE_SCAN_ENABLED', 'false').lower() in ('true', '1', 't')
-CLAMAV_HOST = os.environ.get('CLAMAV_HOST', 'clamav')
-CLAMAV_PORT = int(os.environ.get('CLAMAV_PORT', 3310))
-MALWARE_SCAN_TIMEOUT_MS = int(os.environ.get('MALWARE_SCAN_TIMEOUT_MS', 10000))
-MALWARE_SCAN_FAIL_MODE = os.environ.get('MALWARE_SCAN_FAIL_MODE', 'closed')
-
 # Email Configuration (for sending password resets, etc.)
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = os.environ.get('EMAIL_HOST')
@@ -124,25 +114,6 @@ DATABASES = {
 # Log Level Configuration
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 
-# Error Monitoring (Sentry)
-SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
-SENTRY_ENVIRONMENT = os.environ.get('SENTRY_ENVIRONMENT', 'development' if DEBUG else 'production')
-SENTRY_RELEASE = os.environ.get('SENTRY_RELEASE', 'rolling')
-SENTRY_SEND_DEFAULT_PII = os.environ.get('SENTRY_SEND_DEFAULT_PII', 'false').lower() in ('true', '1', 't')
-
-if SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        integrations=[
-            DjangoIntegration(),
-            CeleryIntegration(),
-        ],
-        environment=SENTRY_ENVIRONMENT,
-        release=SENTRY_RELEASE,
-        send_default_pii=SENTRY_SEND_DEFAULT_PII,
-    )
-
-
 # Redis base URL from environment (should not include database number)
 REDIS_BASE_URL = os.environ.get('REDIS_URL', 'redis://redis:6379').rstrip('/')
 
@@ -165,10 +136,6 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_TASK_DEFAULT_QUEUE = 'celery'
-CELERY_TASK_ROUTES = {
-    'documents.tasks.generate_video_stream_task': {'queue': 'video_processing'},  # for resource-intensive, slow video transcoding
-}
-
 CELERY_BEAT_SCHEDULE = {
     'purge-expired-trash-documents-daily': {
         'task': 'documents.tasks.purge_expired_trash_documents_task',
@@ -179,36 +146,6 @@ CELERY_BEAT_SCHEDULE = {
 # Test-specific Celery settings to run tasks synchronously
 if 'test' in sys.argv or 'pytest' in sys.modules:
     CELERY_TASK_ALWAYS_EAGER = True
-
-
-# Document Preview Engine Settings
-PDF_PREVIEW_ENGINE = os.environ.get('PDF_PREVIEW_ENGINE', 'server_pages')
-if PDF_PREVIEW_ENGINE not in ('pdfjs', 'server_pages'):
-    raise ValueError(f"Invalid PDF_PREVIEW_ENGINE: '{PDF_PREVIEW_ENGINE}'. Allowed options are 'pdfjs', 'server_pages'.")
-
-ENABLE_OFFICE_PREVIEW = os.environ.get('ENABLE_OFFICE_PREVIEW', 'true').lower() in ('true', '1', 't')
-
-if ENABLE_OFFICE_PREVIEW and PDF_PREVIEW_ENGINE != 'server_pages':
-    raise ValueError("Invalid configuration: ENABLE_OFFICE_PREVIEW cannot be true when PDF_PREVIEW_ENGINE is not 'server_pages'.")
-
-ENABLE_VIDEO_PREVIEW = os.environ.get('ENABLE_VIDEO_PREVIEW', 'false').lower() in ('true', '1', 't')
-
-# Video transcoding optimization settings
-VIDEO_TRANSCODE_PRESET = os.environ.get('VIDEO_TRANSCODE_PRESET', 'superfast')
-try:
-    VIDEO_TRANSCODE_THREADS = int(os.environ.get('VIDEO_TRANSCODE_THREADS', '2'))
-except ValueError:
-    VIDEO_TRANSCODE_THREADS = 2
-
-try:
-    VIDEO_TRANSCODE_MAX_WIDTH = int(os.environ.get('VIDEO_TRANSCODE_MAX_WIDTH', '1920'))
-except ValueError:
-    VIDEO_TRANSCODE_MAX_WIDTH = 1920
-
-try:
-    VIDEO_TRANSCODE_MAX_HEIGHT = int(os.environ.get('VIDEO_TRANSCODE_MAX_HEIGHT', '1080'))
-except ValueError:
-    VIDEO_TRANSCODE_MAX_HEIGHT = 1080
 
 
 # ==============================================================================
@@ -233,8 +170,6 @@ INSTALLED_APPS = [
     'datarooms',
     'sharelinks',
     'analytics',
-    'cloudfiles',
-    'filerequests',
     'automations',
 ]
 
@@ -384,21 +319,8 @@ STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Storage Configuration (for FileSystem or MinIO)
-STORAGE_TYPE = os.environ.get('STORAGE_TYPE', 'FILESYSTEM')
-
-if STORAGE_TYPE == 'MINIO':
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-    AWS_ACCESS_KEY_ID = os.environ.get('MINIO_ROOT_USER')
-    AWS_SECRET_ACCESS_KEY = os.environ.get('MINIO_ROOT_PASSWORD')
-    AWS_STORAGE_BUCKET_NAME = os.environ.get('MINIO_BUCKET_NAME', 'coneshare')
-    AWS_S3_ENDPOINT_URL = os.environ.get('MINIO_ENDPOINT')  # e.g., 'http://minio:9000'
-    AWS_S3_OBJECT_PARAMETERS = {
-        'CacheControl': 'max-age=86400',
-    }
-    AWS_LOCATION = 'media'  # Subdirectory within the bucket
-else:  # Default to FileSystemStorage
-    DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
+# User-uploaded media (avatars, branding images) are stored on the local filesystem.
+# Documents themselves are stored by the Go file service (core/).
 
 
 # Default primary key field type
@@ -496,10 +418,6 @@ MAX_PREVIEW_FILE_SIZE_MB = 100
 # Files larger than this will be restricted from watermarked download to prevent memory exhaustion.
 MAX_WATERMARK_FILE_SIZE_MB = 100
 
-# Maximum file size in megabytes for which a video preview will be generated.
-# Files larger than this will be marked as download-only.
-MAX_VIDEO_PREVIEW_SIZE_MB = 100
-
 
 # Maximum number of pages allowed for an in-browser preview.
 # Documents with more pages will be available for download only.
@@ -511,38 +429,6 @@ FILE_SIZE_QUOTA_MB = 0
 
 # Maximum number of files that can be uploaded in a single upload operation.
 MAX_FILES_PER_UPLOAD = 100
-
-# Cloud Services Configuration
-# A list of enabled cloud providers.
-ENABLED_CLOUD_PROVIDERS = ["dropbox", "google_drive", "nextcloud"]
-
-# A dictionary mapping cloud providers to their default import folder names.
-CLOUD_IMPORT_FOLDER_MAPPING = {
-    "dropbox": "Dropbox Imports",
-    "google_drive": "Google Drive Imports",
-    "nextcloud": "Nextcloud Imports",
-}
-
-# Maximum file size in megabytes for cloud imports.
-CLOUD_IMPORT_MAX_SIZE_MB = 100
-
-# Dropbox API Credentials
-# Get these from your Dropbox App Console.
-DROPBOX_APP_KEY = ''
-DROPBOX_APP_SECRET = ''
-
-
-# Google Drive API Credentials
-# Get these from your Google Cloud Console.
-GOOGLE_DRIVE_CLIENT_ID = ''
-GOOGLE_DRIVE_CLIENT_SECRET = ''
-
-
-# Nextcloud API Credentials
-# Get these from your Nextcloud Admin Panel.
-NEXT_CLOUD_HOST = ''  # e.g., 'https://cloud.example.com'
-NEXT_CLOUD_CLIENT_ID = ''
-NEXT_CLOUD_CLIENT_SECRET = ''
 
 # Public signup toggle.
 ENABLE_PUBLIC_SIGNUP = False

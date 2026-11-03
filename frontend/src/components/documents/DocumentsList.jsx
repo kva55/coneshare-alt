@@ -43,7 +43,6 @@ export function DocumentsList({
   onRename,
   onDelete,
   onShare,
-  onRequestFiles,
   onDownload,
   onCopy,
   themed = false,
@@ -291,7 +290,6 @@ export function DocumentsList({
                   onRename={onRename || internalHandleRename}
                   onDelete={onDelete || internalHandleDelete}
                   onShare={onShare}
-                  onRequestFiles={onRequestFiles}
                   onToggleStar={onToggleStar}
                   isReadOnly={isReadOnly}
                   showActions={showActions}

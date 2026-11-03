@@ -148,88 +148,6 @@ def test_deliver_task_adds_time_and_approximate_location_to_chat_text(mock_reque
     assert '\nApproximate location: Shanghai, China' in text
 
 
-@patch('automations.tasks.requests.request')
-def test_deliver_task_builds_file_request_uploaded_text(mock_request, user, share_link):
-    delivery = _make_delivery(user, share_link)
-    delivery.destination.destination_type = 'slack'
-    delivery.destination.save(update_fields=['destination_type'])
-    delivery.event_type = 'file_request_uploaded'
-    delivery.payload = {
-        'organization_id': str(user.organization.id),
-        'file_request_id': 'fr-1',
-        'document_id': 'doc-1',
-        'uploaded_by_name': 'John Doe',
-        'uploaded_by_email': 'john.doe@example.com',
-        'uploaded_file_name': 'nda.pdf',
-        'file_request_slug': 'upload-abc',
-    }
-    delivery.save(update_fields=['event_type', 'payload'])
-    mock_request.return_value = DummyResponse(status_code=200, text='ok')
-
-    deliver_automation_delivery_task(str(delivery.id))
-
-    _, kwargs = mock_request.call_args
-    assert 'text' in kwargs['json']
-    assert kwargs['json']['text'] == 'John Doe <john.doe@example.com> uploaded "nda.pdf" to file request "upload-abc".'
-    assert 'john.doe@example.com' in kwargs['json']['text']
-    assert 'nda.pdf' in kwargs['json']['text']
-    assert 'upload-abc' in kwargs['json']['text']
-
-
-@patch('automations.tasks.requests.request')
-def test_deliver_task_includes_custom_field_values_in_file_request_chat_text(mock_request, user, share_link):
-    delivery = _make_delivery(user, share_link)
-    delivery.destination.destination_type = 'slack'
-    delivery.destination.save(update_fields=['destination_type'])
-    delivery.event_type = 'file_request_uploaded'
-    delivery.payload = {
-        'organization_id': str(user.organization.id),
-        'file_request_id': 'fr-1',
-        'uploaded_by_name': 'John Doe',
-        'uploaded_by_email': 'john.doe@example.com',
-        'uploaded_file_name': 'nda.pdf',
-        'file_request_slug': 'upload-abc',
-        'custom_field_values': {
-            'case_number': 'CASE-2026-001',
-            'document_type': 'Contract',
-        },
-    }
-    delivery.save(update_fields=['event_type', 'payload'])
-    mock_request.return_value = DummyResponse(status_code=200, text='ok')
-
-    deliver_automation_delivery_task(str(delivery.id))
-
-    _, kwargs = mock_request.call_args
-    assert 'Case Number: CASE-2026-001' in kwargs['json']['text']
-    assert 'Document Type: Contract' in kwargs['json']['text']
-
-
-@patch('automations.tasks.requests.request')
-def test_deliver_task_builds_file_request_malware_detected_text(mock_request, user, share_link):
-    delivery = _make_delivery(user, share_link)
-    delivery.destination.destination_type = 'slack'
-    delivery.destination.save(update_fields=['destination_type'])
-    delivery.event_type = 'file_request_malware_detected'
-    delivery.payload = {
-        'organization_id': str(user.organization.id),
-        'file_request_id': 'fr-1',
-        'uploaded_by_name': 'John Doe',
-        'uploaded_by_email': 'john.doe@example.com',
-        'uploaded_file_name': 'virus.exe',
-        'file_request_slug': 'upload-abc',
-    }
-    delivery.save(update_fields=['event_type', 'payload'])
-    mock_request.return_value = DummyResponse(status_code=200, text='ok')
-
-    deliver_automation_delivery_task(str(delivery.id))
-
-    _, kwargs = mock_request.call_args
-    assert 'text' in kwargs['json']
-    assert kwargs['json']['text'] == 'Malware was detected in uploaded file "virus.exe" to file request "upload-abc" from John Doe <john.doe@example.com>.'
-    assert 'john.doe@example.com' in kwargs['json']['text']
-    assert 'virus.exe' in kwargs['json']['text']
-    assert 'upload-abc' in kwargs['json']['text']
-
 
 @patch('automations.tasks.requests.request')
 def test_deliver_task_builds_wechat_payload_from_destination_type(mock_request, user, share_link):
@@ -818,33 +736,6 @@ def test_event_sentence_and_target_description_localization():
         sentence = _build_event_sentence('document_viewed', payload)
         assert sentence == 'Uw gedeelde document "Annual_Report.pdf" in map "Finance" in dataroom "Secret Room" is bekeken door buyer@example.com.'
 
-
-@patch('automations.emails.send_mail')
-def test_deliver_task_standard_fallback_email_respects_user_language(mock_send_mail, user, share_link):
-    from automations.models import AutomationDelivery
-
-    user.language = 'zh-hans'
-    user.save(update_fields=['language'])
-
-    delivery = _make_delivery(user, share_link)
-    delivery.destination.destination_type = 'email'
-    delivery.destination.save()
-    delivery.event_type = 'file_request_uploaded'
-    delivery.payload = {
-        'organization_id': str(user.organization.id),
-        'file_request_name': 'KYC Documents',
-        'uploaded_by_name': 'Alice',
-        'uploaded_by_email': 'alice@example.com',
-        'uploaded_file_name': 'passport.jpg',
-    }
-    delivery.save()
-
-    deliver_automation_delivery_task(str(delivery.id))
-
-    mock_send_mail.assert_called_once()
-    _, call_kwargs = mock_send_mail.call_args
-    assert 'Alice <alice@example.com> 向您的文件收集“KYC Documents”上传了文件' in call_kwargs['subject']
-    assert '访问详情' in call_kwargs['html_message']
 
 
 @patch('automations.emails.send_mail')

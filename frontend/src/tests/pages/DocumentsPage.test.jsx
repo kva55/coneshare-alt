@@ -41,8 +41,6 @@ describe('DocumentsPage', () => {
         documents: [],
       },
     });
-    api.getCloudProviders.mockResolvedValue({ data: [] });
-    api.getCloudConnections.mockResolvedValue({ data: [] });
 
     // Spy on console.error
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

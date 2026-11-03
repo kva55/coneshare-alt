@@ -128,43 +128,33 @@ def _make_raw_file_generator(download_url: str, expected_size: Optional[int] = N
 
 def _make_watermarked_file_generator(doc, primary_version, watermark_text, request, viewer_email):
     """
-    Creates a generator that renders a watermarked image or PDF on-the-fly and yields its buffer.
-    Pillow Image objects and BytesIO buffers are explicitly closed in finally blocks.
+    Creates a generator that renders a watermarked PDF on-the-fly and yields its buffer.
+    BytesIO buffers are explicitly closed in finally blocks.
     """
     # Deferred imports to prevent circular dependency with sharelinks.views
     from .views import (
-        _generate_watermarked_image,
         _generate_watermarked_pdf,
         _generate_flattened_watermarked_pdf,
     )
 
     def generator():
-        if doc.type == 'image':
-            image_buffer, _ = _generate_watermarked_image(
+        flatten_active = get_dynamic_setting('FLATTEN_WATERMARKED_DOWNLOADS')
+        max_pages = get_dynamic_setting('MAX_PREVIEW_PAGES') or 50
+        if flatten_active and getattr(doc, 'num_pages', 0) and doc.num_pages > max_pages:
+            flatten_active = False
+
+        if flatten_active:
+            pdf_buffer = _generate_flattened_watermarked_pdf(
                 doc, primary_version, watermark_text, request, viewer_email
             )
-            try:
-                yield image_buffer.getvalue()
-            finally:
-                image_buffer.close()
         else:
-            flatten_active = get_dynamic_setting('FLATTEN_WATERMARKED_DOWNLOADS')
-            max_pages = get_dynamic_setting('MAX_PREVIEW_PAGES') or 50
-            if flatten_active and getattr(doc, 'num_pages', 0) and doc.num_pages > max_pages:
-                flatten_active = False
-
-            if flatten_active:
-                pdf_buffer = _generate_flattened_watermarked_pdf(
-                    doc, primary_version, watermark_text, request, viewer_email
-                )
-            else:
-                pdf_buffer = _generate_watermarked_pdf(
-                    doc, primary_version, watermark_text, request, viewer_email
-                )
-            try:
-                yield pdf_buffer.getvalue()
-            finally:
-                pdf_buffer.close()
+            pdf_buffer = _generate_watermarked_pdf(
+                doc, primary_version, watermark_text, request, viewer_email
+            )
+        try:
+            yield pdf_buffer.getvalue()
+        finally:
+            pdf_buffer.close()
     return generator
 
 
@@ -326,8 +316,7 @@ def generate_dataroom_archive_stream(
             # Per security policy: documents that cannot be watermarked must not be downloaded when watermark is enabled
             if setting.enable_watermark:
                 is_watermarkable = (
-                    (doc.type in {'image', 'pdf'} and bool(primary_version.storage_key or primary_version.original_storage_key)) or
-                    (doc.type == 'document' and bool(primary_version.storage_key))
+                    doc.type == 'pdf' and bool(primary_version.storage_key or primary_version.original_storage_key)
                 )
                 if not is_watermarkable:
                     continue
@@ -347,12 +336,9 @@ def generate_dataroom_archive_stream(
             display_name = child_doc.name or doc.name or "document"
             target_ext = posixpath.splitext(display_name)[1]
 
-            # Adjust extension for watermarked image/document
+            # Watermarked downloads are always PDFs
             if setting.enable_watermark:
-                if doc.type == 'image':
-                    target_ext = '.jpg'
-                else:
-                    target_ext = '.pdf'
+                target_ext = '.pdf'
                 base_stem = posixpath.splitext(display_name)[0]
                 final_name = f"{base_stem}{target_ext}"
             else:

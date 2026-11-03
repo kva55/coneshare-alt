@@ -158,7 +158,6 @@ Coneshare consists of four primary services:
 * `backend/`: Django and DRF API, Celery, and Redis for background tasks
 * `core/`: Go service for file delivery and media streaming
 * `frontend/`: React and Vite web application
-* `mcp-server/`: FastMCP remote server for AI agent and assistant integrations
 
 Technical reference:
 

@@ -53,9 +53,6 @@ vi.mock('../../components/documents/PreviewStatePanel', () => ({
   PreviewStatePanel: () => <div>This may take a moment for large documents.</div>,
 }));
 
-vi.mock('../../components/documents/PdfJsViewer', () => ({
-  PdfJsViewer: () => <div>PdfJs Viewer</div>,
-}));
 
 vi.mock('../../components/viewer/ViewerToolbar', () => ({
   ViewerToolbar: ({ allowDownload, onPrint, previewMode }) => (
@@ -501,8 +498,9 @@ describe('ShareLinkViewerPage', () => {
             data: {
               id: 'doc1',
               name: 'Document 1',
-              type: 'document',
-              preview_mode: 'client_pdf',
+              type: 'pdf',
+              preview_mode: 'server_pages',
+              pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
               link_settings: { allow_download: true },
               dataroom_context: { id: 'dr1', parent_folder_id: 'folder1' },
             },
@@ -513,8 +511,9 @@ describe('ShareLinkViewerPage', () => {
             data: {
               id: 'doc2',
               name: 'Document 2',
-              type: 'document',
-              preview_mode: 'client_pdf',
+              type: 'pdf',
+              preview_mode: 'server_pages',
+              pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
               link_settings: { allow_download: true },
               dataroom_context: { id: 'dr1', parent_folder_id: 'folder1' },
             },
@@ -532,10 +531,10 @@ describe('ShareLinkViewerPage', () => {
       api.recordDataroomVisit.mockClear();
 
       fireEvent.click(screen.getByTitle('Document 1'));
-      await screen.findByText('PdfJs Viewer');
+      await screen.findByText('Preview Viewer');
 
       fireEvent.click(screen.getByTitle('Document 2'));
-      await screen.findByText('PdfJs Viewer');
+      await screen.findByText('Preview Viewer');
 
       expect(api.recordDataroomVisit).toHaveBeenCalledTimes(2);
       expect(api.getShareLinkViewData).toHaveBeenCalledTimes(2);
@@ -547,9 +546,10 @@ describe('ShareLinkViewerPage', () => {
       const docData = {
         id: 'doc1',
         name: 'Document 1',
-        type: 'document',
+        type: 'pdf',
         link_type: 'document',
-        preview_mode: 'client_pdf',
+        preview_mode: 'server_pages',
+        pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
         link_settings: { id: 'link_abc', allow_download: true },
         dataroom_context: { id: 'dr1', name: 'Room', parent_folder_id: 'folder1' },
       };
@@ -560,7 +560,7 @@ describe('ShareLinkViewerPage', () => {
 
       renderComponent('/view/test-slug?dataroom_document_id=doc1');
 
-      await screen.findByText('PdfJs Viewer');
+      await screen.findByText('Preview Viewer');
 
       // Let's assert on call count of getShareLinkViewData.
       // 1 call from ShareLinkViewerPage (initial load)
@@ -684,14 +684,14 @@ describe('ShareLinkViewerPage', () => {
         api.createViewSession.mockResolvedValue({ data: mockViewData });
       });
 
-      it('prints raw pdf_preview_url when allow_download is true and no watermark is configured', async () => {
+      it('prints through the download endpoint when allow_download is true and no watermark is configured', async () => {
         api.getShareLinkViewData.mockResolvedValue({
           data: {
             id: 'doc-1',
             name: 'test.pdf',
             type: 'pdf',
-            preview_mode: 'client_pdf',
-            pdf_preview_url: 'https://example.com/raw.pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: {
               allow_download: true,
               enable_watermark: false,
@@ -706,7 +706,7 @@ describe('ShareLinkViewerPage', () => {
         });
 
         fireEvent.click(screen.getByTestId('toolbar-print-btn'));
-        expect(printPdf).toHaveBeenCalledWith('https://example.com/raw.pdf');
+        expect(printPdf).toHaveBeenCalledWith('/api/v1/links/test-slug/download-file/?inline=true');
       });
 
       it('routes printing through watermarked downloadUrl when watermark is enabled', async () => {
@@ -715,8 +715,8 @@ describe('ShareLinkViewerPage', () => {
             id: 'doc-1',
             name: 'test.pdf',
             type: 'pdf',
-            preview_mode: 'client_pdf',
-            pdf_preview_url: 'https://example.com/raw.pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: {
               allow_download: true,
               enable_watermark: true,
@@ -733,8 +733,7 @@ describe('ShareLinkViewerPage', () => {
 
         fireEvent.click(screen.getByTestId('toolbar-print-btn'));
         expect(printPdf).toHaveBeenCalledWith('/api/v1/links/test-slug/download-file/?inline=true');
-        expect(printPdf).not.toHaveBeenCalledWith('https://example.com/raw.pdf');
-      });
+              });
 
       it('routes printing through watermarked downloadUrl even if watermark_text is empty when enable_watermark is true', async () => {
         api.getShareLinkViewData.mockResolvedValue({
@@ -742,8 +741,8 @@ describe('ShareLinkViewerPage', () => {
             id: 'doc-1',
             name: 'test.pdf',
             type: 'pdf',
-            preview_mode: 'client_pdf',
-            pdf_preview_url: 'https://example.com/raw.pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: {
               allow_download: true,
               enable_watermark: true,
@@ -761,8 +760,7 @@ describe('ShareLinkViewerPage', () => {
 
         fireEvent.click(screen.getByTestId('toolbar-print-btn'));
         expect(printPdf).toHaveBeenCalledWith('/api/v1/links/test-slug/download-file/?inline=true');
-        expect(printPdf).not.toHaveBeenCalledWith('https://example.com/raw.pdf');
-      });
+              });
 
       it('does not display print button or allow printing when allow_download is false', async () => {
         api.getShareLinkViewData.mockResolvedValue({
@@ -770,8 +768,8 @@ describe('ShareLinkViewerPage', () => {
             id: 'doc-1',
             name: 'test.pdf',
             type: 'pdf',
-            preview_mode: 'client_pdf',
-            pdf_preview_url: 'https://example.com/raw.pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: {
               allow_download: false,
             },

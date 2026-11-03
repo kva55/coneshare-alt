@@ -58,19 +58,6 @@ services:
       - core
     env_file: .env
 
-  video_worker:
-    <<: *default-logging
-    image: coneshare:dev
-    command: celery -A backend worker -l INFO -Q video_processing --concurrency=${CELERY_VIDEO_WORKER_CONCURRENCY:-1}
-    volumes:
-      - ./backend:/app
-    restart: unless-stopped
-    depends_on:
-      - backend
-      - redis
-      - core
-    env_file: .env
-
   celery_beat:
     <<: *default-logging
     image: coneshare:dev
@@ -97,56 +84,6 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
-
-  portal:
-    <<: *default-logging
-    image: coneshare:portal
-    build:
-      context: ./portal
-      dockerfile: Dockerfile-dev
-    # command: tail -f /dev/null
-    volumes:
-      - ./portal:/app
-      - /app/node_modules
-    ports:
-      - "3000:3000"
-    restart: unless-stopped
-
-  mcp_server:
-    <<: *default-logging
-    image: coneshare:mcp
-    build:
-      context: ./mcp-server
-      dockerfile: Dockerfile-dev
-    command: python -m coneshare_mcp.server
-    ports:
-      - "${MCP_PORT:-8001}:${MCP_PORT:-8001}"
-    volumes:
-      - ./mcp-server:/app
-    environment:
-      - PYTHONPATH=/app
-      - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}
-      - MCP_PATH=${MCP_PATH:-/mcp/sse}
-      - CONESHARE_API_URL=${CONESHARE_API_URL:-http://backend:8000/api/v1}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), timeout=2)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    depends_on:
-      - backend
-
-  clamav:
-    <<: *default-logging
-    image: clamav/clamav:stable-debian
-    restart: unless-stopped
-    profiles:
-      - malware
-    expose:
-      - "3310"
 
 volumes:
   redis_data:

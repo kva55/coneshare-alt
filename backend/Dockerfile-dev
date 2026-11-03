@@ -11,10 +11,8 @@ WORKDIR /app
 # Install system dependencies for document processing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
-    libreoffice \
     fonts-noto-cjk \
     curl \
-    ffmpeg \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
@@ -27,8 +25,8 @@ RUN mkdir -p /geoip && \
 #    curl -L -o /fonts/NotoSerifCJKsc-Regular.otf https://github.com/notofonts/noto-cjk/raw/refs/heads/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf
 
 # Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
 
 # Copy the rest of the application's code
 COPY . .

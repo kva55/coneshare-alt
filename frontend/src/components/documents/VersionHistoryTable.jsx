@@ -56,13 +56,7 @@ export function VersionHistoryTable({
 
   const totalPages = pageSize > 0 ? Math.ceil(totalCount / pageSize) : 0;
 
-  const getSourceDisplay = (version) => {
-    const cloudImport = version.cloud_import;
-    if (cloudImport) {
-      return t('documents.importedFrom', { provider: cloudImport.provider_display || cloudImport.provider });
-    }
-    return t('documents.manualUpload');
-  };
+  const getSourceDisplay = () => t('documents.manualUpload');
 
   const getStatusBadge = (version) => {
     const badges = [];

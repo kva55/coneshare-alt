@@ -14,7 +14,6 @@ import * as api from '../services/api';
 const getSettingGroups = (t) => [
   { key: 'general', label: t('admin.groupGeneral'), help: t('admin.groupGeneralHelp') },
   { key: 'quota', label: t('admin.groupQuota'), help: t('admin.groupQuotaHelp') },
-  { key: 'cloud', label: t('admin.groupCloud'), help: t('admin.groupCloudHelp') },
   { key: 'security', label: t('admin.groupSecurity'), help: t('admin.groupSecurityHelp') },
   { key: 'other', label: t('admin.groupOther'), help: t('admin.groupOtherHelp') },
 ];
@@ -23,21 +22,10 @@ const SETTING_GROUP_BY_KEY = {
   ENABLE_PUBLIC_SIGNUP: 'security',
   FLATTEN_WATERMARKED_DOWNLOADS: 'security',
   MAX_PREVIEW_FILE_SIZE_MB: 'quota',
-  MAX_VIDEO_PREVIEW_SIZE_MB: 'quota',
   MAX_WATERMARK_FILE_SIZE_MB: 'quota',
   MAX_PREVIEW_PAGES: 'quota',
   FILE_SIZE_QUOTA_MB: 'quota',
   MAX_FILES_PER_UPLOAD: 'quota',
-  CLOUD_IMPORT_MAX_SIZE_MB: 'quota',
-  ENABLED_CLOUD_PROVIDERS: 'cloud',
-  CLOUD_IMPORT_FOLDER_MAPPING: 'cloud',
-  DROPBOX_APP_KEY: 'cloud',
-  DROPBOX_APP_SECRET: 'cloud',
-  GOOGLE_DRIVE_CLIENT_ID: 'cloud',
-  GOOGLE_DRIVE_CLIENT_SECRET: 'cloud',
-  NEXT_CLOUD_HOST: 'cloud',
-  NEXT_CLOUD_CLIENT_ID: 'cloud',
-  NEXT_CLOUD_CLIENT_SECRET: 'cloud',
 };
 
 const humanizeKey = (key) =>

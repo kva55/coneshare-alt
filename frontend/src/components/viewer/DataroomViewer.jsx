@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
   HomeIcon,
@@ -7,7 +7,6 @@ import {
   MoreHorizontal,
   Eye,
   MessageCircle,
-  AlertTriangle,
   ChevronsLeft,
   ChevronsRight,
   Search,
@@ -34,10 +33,6 @@ import { DataroomFileTree } from './DataroomFileTree';
 import { ViewerToolbar } from './ViewerToolbar';
 import { PreviewViewer } from '../documents/PreviewViewer';
 
-const PdfJsViewer = lazy(() => import('../documents/PdfJsViewer').then(m => ({ default: m.PdfJsViewer })));
-const VideoViewer = lazy(() => import('../documents/VideoViewer').then(m => ({ default: m.VideoViewer })));
-const SpreadsheetViewer = lazy(() => import('../documents/SpreadsheetViewer').then(m => ({ default: m.SpreadsheetViewer })));
-const MarkdownViewer = lazy(() => import('../documents/MarkdownViewer').then(m => ({ default: m.MarkdownViewer })));
 import { printPdf, printImages } from '../../lib/print';
 import {
   hasRenderablePages,
@@ -60,7 +55,6 @@ const PREVIEW_POLL_INTERVAL_MS = 3000;
 function ListItem({ item, onItemClick, onDownloadClick, onQnaClick, qnaEnabled = true, showIndex = false, index = null }) {
   const { t } = useTranslation();
   const isFolder = item.type === 'folder';
-  const isVideo = item.document_type === 'video' || item.type === 'video';
   const indexLabel = index !== null ? `#${String(index).padStart(2, '0')}` : null;
 
   return (
@@ -159,9 +153,7 @@ function ListItem({ item, onItemClick, onDownloadClick, onQnaClick, qnaEnabled =
         >
           <Eye className="h-3.5 w-3.5" />
           <span>
-            {isVideo
-              ? t('viewer.watchVideo', { defaultValue: 'Watch Video' })
-              : t('viewer.viewDocument', { defaultValue: 'View Document' })}
+            {t('viewer.viewDocument', { defaultValue: 'View Document' })}
           </span>
         </Button>
         <DropdownMenu.Root>
@@ -324,10 +316,6 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
       setTotalPages(documentViewData.num_pages || (documentViewData.pages?.length || 1));
     }
   }, [documentViewData]);
-
-  const handleDocumentLoad = useCallback(({ numPages }) => {
-    setTotalPages(numPages);
-  }, []);
 
   const handleFullScreen = () => {
     if (viewerRef.current) {
@@ -887,25 +875,12 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
   const handlePrint = () => {
     if (!documentViewData || !documentViewData.link_settings?.allow_download) return;
 
-    const isWatermarked = Boolean(
-      documentViewData.link_settings?.enable_watermark ?? scopeData?.link_settings?.enable_watermark
-    );
-
-    if (documentViewData.preview_mode === 'client_pdf') {
-      if (isWatermarked && docDownloadUrl) {
-        const inlineUrl = docDownloadUrl.includes('?') ? `${docDownloadUrl}&inline=true` : `${docDownloadUrl}?inline=true`;
-        printPdf(inlineUrl);
-      } else {
-        printPdf(documentViewData.pdf_preview_url);
-      }
+    if (documentViewData.type === 'pdf' && docDownloadUrl) {
+      const inlineUrl = docDownloadUrl.includes('?') ? `${docDownloadUrl}&inline=true` : `${docDownloadUrl}?inline=true`;
+      printPdf(inlineUrl);
     } else {
-      if (documentViewData.type === 'pdf' && docDownloadUrl) {
-        const inlineUrl = docDownloadUrl.includes('?') ? `${docDownloadUrl}&inline=true` : `${docDownloadUrl}?inline=true`;
-        printPdf(inlineUrl);
-      } else {
-        const imageUrls = documentViewData.pages?.map((p) => p.url) || [];
-        printImages(imageUrls);
-      }
+      const imageUrls = documentViewData.pages?.map((p) => p.url) || [];
+      printImages(imageUrls);
     }
   };
 
@@ -962,25 +937,11 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
       (currentScopeQnaThreadCount > 0 ? `, ${t('qna.threadsCount', { count: currentScopeQnaThreadCount, defaultValue: `${currentScopeQnaThreadCount} threads` })}` : '');
 
   // Inline Document Viewer specific layout parameters
-  const PREVIEWABLE_TYPES = ['image', 'pdf', 'document', 'video', 'spreadsheet', 'markdown'];
-  const isPreviewable = documentViewData && PREVIEWABLE_TYPES.includes(documentViewData.type);
+  // Only PDFs are previewable; every other type is stored but never rendered.
+  const isPreviewable = Boolean(documentViewData && documentViewData.type === 'pdf');
   const canDownload = Boolean(documentViewData?.link_settings?.allow_download);
-  const isVideo = documentViewData && documentViewData.type === 'video';
-  const isVideoReady = isVideo && documentViewData.preview_status === 'ready';
-  const isSpreadsheet = documentViewData && documentViewData.preview_mode === 'spreadsheet';
-  const isSpreadsheetReady = isSpreadsheet && (documentViewData.preview_status === 'ready' || Boolean(documentViewData.spreadsheet_preview_url));
-  const isMarkdown = documentViewData && documentViewData.preview_mode === 'markdown';
-  const isMarkdownReady = isMarkdown && (documentViewData.preview_status === 'ready' || Boolean(documentViewData.markdown_preview_url));
   const canRenderPages = hasRenderablePages(documentViewData);
-  const showPreviewState = documentViewData && isPreviewable && !documentViewData.download_only && (
-    isVideo
-      ? !isVideoReady
-      : isSpreadsheet
-        ? !isSpreadsheetReady
-        : isMarkdown
-          ? !isMarkdownReady
-          : (!canRenderPages && documentViewData.preview_mode !== 'client_pdf')
-  );
+  const showPreviewState = documentViewData && isPreviewable && !documentViewData.download_only && !canRenderPages;
 
   let docDownloadUrl = `/api/v1/links/${slug}/download-file/`;
   if (selectedDocumentId) {
@@ -1179,15 +1140,9 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
                   <div className="flex h-full items-center justify-center p-4 w-full bg-gray-50">
                     <div className="w-full max-w-xl rounded-2xl bg-white border border-gray-200/80 p-8 sm:p-10 text-center shadow-xl shadow-gray-200/50">
                       <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl">
-                        {documentViewData.type === 'video' && documentViewData.link_settings?.enable_watermark && documentViewData.download_only ? (
-                          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 ring-8 ring-amber-50/50">
-                            <AlertTriangle className="h-8 w-8" />
-                          </div>
-                        ) : (
-                          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 text-gray-600 ring-8 ring-gray-100/60">
-                            <DownloadIcon className="h-8 w-8" />
-                          </div>
-                        )}
+                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 text-gray-600 ring-8 ring-gray-100/60">
+                          <DownloadIcon className="h-8 w-8" />
+                        </div>
                       </div>
                       <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 truncate" title={documentViewData.name}>
                         {documentViewData.name}
@@ -1196,15 +1151,9 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
                         <p className="mt-1 text-sm font-medium text-gray-500">{formatBytes(documentViewData.file_size)}</p>
                       ) : null}
                       <p className="mt-3 mb-6 text-sm text-gray-600 leading-relaxed max-w-sm mx-auto">
-                        {documentViewData.type === 'video' && documentViewData.link_settings?.enable_watermark && documentViewData.download_only
-                          ? t('viewer.watermarkedVideoBlockedNotice')
-                          : t('viewer.previewNotAvailableNotice')}
+                        {t('viewer.previewNotAvailableNotice')}
                       </p>
-                      {documentViewData.type === 'video' && documentViewData.link_settings?.enable_watermark && documentViewData.download_only ? (
-                        <Button size="lg" className="w-full h-11 rounded-xl font-medium" disabled>
-                          {t('viewer.downloadRestricted')}
-                        </Button>
-                      ) : canDownload ? (
+                      {canDownload ? (
                         <Button asChild size="lg" className="w-full h-11 rounded-xl font-medium gap-2 shadow-sm">
                           <a href={docDownloadUrl} download={documentViewData.name}>
                             <DownloadIcon className="h-4 w-4" />
@@ -1234,29 +1183,27 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
                   </div>
                 ) : (
                   <div className="relative flex-1 flex flex-col h-full overflow-hidden">
-                    {documentViewData.preview_mode !== 'video' && (
-                      <ViewerToolbar
-                        allowDownload={canDownload}
-                        downloadUrl={docDownloadUrl}
-                        downloadFileName={documentViewData.name}
-                        downloadDocumentId={selectedDocumentId}
-                        onFullScreen={handleFullScreen}
-                        onZoomIn={handleZoomIn}
-                        onZoomOut={handleZoomOut}
-                        zoomLevel={zoomLevel}
-                        onFitWidth={handleFitWidth}
-                        onPageChange={handlePageChange}
-                        currentPage={currentPage}
-                        totalPages={totalPages}
-                        viewId={viewId}
-                        previewMode={documentViewData.preview_mode}
-                        onPrint={handlePrint}
-                        hasPrevSibling={hasPrevSibling}
-                        hasNextSibling={hasNextSibling}
-                        onPrevSibling={onPrevSibling}
-                        onNextSibling={onNextSibling}
-                      />
-                    )}
+                    <ViewerToolbar
+                      allowDownload={canDownload}
+                      downloadUrl={docDownloadUrl}
+                      downloadFileName={documentViewData.name}
+                      downloadDocumentId={selectedDocumentId}
+                      onFullScreen={handleFullScreen}
+                      onZoomIn={handleZoomIn}
+                      onZoomOut={handleZoomOut}
+                      zoomLevel={zoomLevel}
+                      onFitWidth={handleFitWidth}
+                      onPageChange={handlePageChange}
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      viewId={viewId}
+                      previewMode={documentViewData.preview_mode}
+                      onPrint={handlePrint}
+                      hasPrevSibling={hasPrevSibling}
+                      hasNextSibling={hasNextSibling}
+                      onPrevSibling={onPrevSibling}
+                      onNextSibling={onNextSibling}
+                    />
                     <Suspense
                       fallback={
                         <div className="flex-1 flex items-center justify-center p-8 bg-zinc-900 h-full w-full">
@@ -1264,85 +1211,14 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
                         </div>
                       }
                     >
-                      {documentViewData.preview_mode === 'video' ? (
-                        <div className="flex-1 flex items-center justify-center p-8 bg-zinc-900 h-full w-full">
-                          <VideoViewer
-                            ref={viewerComponentRef}
-                            videoUrl={documentViewData.video_preview_url}
-                            viewId={viewId}
-                            dataroomVisitId={currentDataroomVisitId}
-                            allowDownload={documentViewData.link_settings?.allow_download}
-                            downloadUrl={docDownloadUrl}
-                            onTokenExpired={() => fetchDocumentViewData(selectedDocumentId, { force: true, silent: true })}
-                          />
-                        </div>
-                      ) : documentViewData.preview_mode === 'spreadsheet' ? (
-                        <SpreadsheetViewer
-                          ref={viewerComponentRef}
-                          spreadsheetUrl={documentViewData.spreadsheet_preview_url}
-                          title={documentViewData.name}
-                          viewId={viewId}
-                          dataroomVisitId={currentDataroomVisitId}
-                          watermarkText={
-                            documentViewData.link_settings?.enable_watermark
-                              ? (documentViewData.link_settings.resolved_watermark_text || documentViewData.link_settings.watermark_text || '')
-                              : ''
-                          }
-                          allowDownload={canDownload}
-                          canCopy={documentViewData.link_settings?.can_copy ?? null}
-                          zoomLevel={zoomLevel}
-                          onPageChange={setCurrentPage}
-                          onDocumentLoad={handleDocumentLoad}
-                          documentData={documentViewData}
-                        />
-                      ) : documentViewData.preview_mode === 'markdown' ? (
-                        <MarkdownViewer
-                          ref={viewerComponentRef}
-                          markdownUrl={documentViewData.markdown_preview_url}
-                          title={documentViewData.name}
-                          viewId={viewId}
-                          dataroomVisitId={currentDataroomVisitId}
-                          watermarkText={
-                            documentViewData.link_settings?.enable_watermark
-                              ? (documentViewData.link_settings.resolved_watermark_text || documentViewData.link_settings.watermark_text || '')
-                              : ''
-                          }
-                          allowDownload={canDownload}
-                          canCopy={documentViewData.link_settings?.can_copy ?? null}
-                          zoomLevel={zoomLevel}
-                          documentData={documentViewData}
-                        />
-                      ) : documentViewData.preview_mode === 'client_pdf' ? (
-                        <PdfJsViewer
-                          ref={viewerComponentRef}
-                          pdfUrl={documentViewData.pdf_preview_url}
-                          title={documentViewData.name}
-                          viewId={viewId}
-                          dataroomVisitId={currentDataroomVisitId}
-                          watermarkText={
-                            documentViewData.link_settings?.enable_watermark
-                              ? (documentViewData.link_settings.resolved_watermark_text || documentViewData.link_settings.watermark_text || '')
-                              : ''
-                          }
-                          allowDownload={canDownload}
-                          isWatermarked={Boolean(
-                            documentViewData.link_settings?.enable_watermark ?? scopeData?.link_settings?.enable_watermark
-                          )}
-                          zoomLevel={zoomLevel}
-                          onPageChange={setCurrentPage}
-                          onDocumentLoad={handleDocumentLoad}
-                          documentData={documentViewData}
-                        />
-                      ) : (
-                        <PreviewViewer
-                          ref={viewerComponentRef}
-                          documentData={documentViewData}
-                          zoomLevel={zoomLevel}
-                          onPageChange={setCurrentPage}
-                          viewId={viewId}
-                          dataroomVisitId={currentDataroomVisitId}
-                        />
-                      )}
+                      <PreviewViewer
+                        ref={viewerComponentRef}
+                        documentData={documentViewData}
+                        zoomLevel={zoomLevel}
+                        onPageChange={setCurrentPage}
+                        viewId={viewId}
+                        dataroomVisitId={currentDataroomVisitId}
+                      />
                     </Suspense>
                   </div>
                 )}

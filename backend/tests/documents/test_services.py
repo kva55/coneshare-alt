@@ -7,7 +7,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from documents.models import Document, DocumentVersion, DocumentPage, Folder
-from documents.renderers import get_renderer, SpreadsheetRenderer
+from documents.renderers import get_renderer
 from documents.services import (
     create_document_from_upload,
     delete_document_and_files,
@@ -91,7 +91,7 @@ class TestEnqueueServerPreviewRender:
             render_error="stale error",
         )
 
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages'):
+        with override_settings():
             render_status = get_renderer(version).enqueue_render_task(version)
      
             assert render_status == DocumentVersion.RENDER_QUEUED
@@ -125,7 +125,7 @@ class TestEnqueueServerPreviewRender:
             render_error="Conversion failed.",
         )
 
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages'):
+        with override_settings():
             render_status = get_renderer(version).enqueue_render_task(version)
      
             assert render_status == DocumentVersion.RENDER_FAILED
@@ -154,7 +154,7 @@ class TestEnqueueServerPreviewRender:
             render_error='',
         )
 
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages'):
+        with override_settings():
             render_status = get_renderer(version).enqueue_render_task(version)
             
             assert render_status == DocumentVersion.RENDER_QUEUED
@@ -275,217 +275,9 @@ class TestCopyDocumentService:
         assert new_doc.metadata['other_key'] == 'value'
 
 
-@pytest.mark.django_db
-@patch('documents.services.fileserver_client.copy_file')
-class TestCopySpreadsheetDocumentService:
-    def test_copy_document_office_converted_to_pdf_retains_spreadsheet_properties(self, mock_copy_file, user):
-        """When copying a spreadsheet whose primary version has content_type='application/pdf', the copy must retain spreadsheet type and resolve to SpreadsheetRenderer."""
-        original_doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            name="financials.xls",
-            type="spreadsheet",
-            content_type="application/vnd.ms-excel",
-            file_size=5000,
-            status="ready",
-        )
-        DocumentVersion.objects.create(
-            document=original_doc,
-            version_number=1,
-            is_primary=True,
-            original_storage_key="org/fin.xls",
-            storage_key="org/fin.pdf",
-            type="document",
-            content_type="application/pdf",
-            file_size=5000,
-            has_pages=False,
-            render_status=DocumentVersion.RENDER_READY,
-        )
-
-        new_doc = copy_document(original_doc, user)
-        new_version = new_doc.versions.first()
-
-        assert new_doc.type == 'spreadsheet'
-        assert new_doc.content_type == 'application/vnd.ms-excel'
-        assert new_version.type == 'spreadsheet'
-        assert new_version.content_type == 'application/vnd.ms-excel'
-        renderer = get_renderer(new_version)
-        assert isinstance(renderer, SpreadsheetRenderer)
-        assert renderer.get_preview_mode(new_version) == 'spreadsheet'
-        assert new_version.render_status == DocumentVersion.RENDER_NOT_GENERATED
-
 
 @pytest.mark.django_db
 class TestPreviewModeServices:
-    def test_is_server_renderable_version_client_pdf(self, user):
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            type='pdf',
-            download_only=False,
-        )
-        version = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            type='pdf',
-            is_primary=True,
-        )
-        
-        with override_settings(PDF_PREVIEW_ENGINE='pdfjs'):
-            assert get_renderer(version).get_preview_mode(version) != 'server_pages'
-
-    def test_preview_mode_for_version_client_pdf(self, user):
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            type='pdf',
-            download_only=False,
-        )
-        version = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            type='pdf',
-            is_primary=True,
-        )
-        
-        with override_settings(PDF_PREVIEW_ENGINE='pdfjs'):
-            assert get_renderer(version).get_preview_mode(version) == 'client_pdf'
-            
-    def test_preview_mode_for_version_office_disabled(self, user):
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            type='document',
-            download_only=False,
-        )
-        version = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            type='document',
-            is_primary=True,
-        )
-        
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages', ENABLE_OFFICE_PREVIEW=False):
-            assert get_renderer(version).get_preview_mode(version) == 'download_only'
-
-    @patch('core.services.get_dynamic_setting')
-    def test_preview_mode_for_large_video_respects_video_limit(self, mock_get_setting, user):
-        def side_effect(key, default=None):
-            if key == 'MAX_PREVIEW_FILE_SIZE_MB':
-                return 100
-            if key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-                return 500
-            return default
-        mock_get_setting.side_effect = side_effect
-
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            type='video',
-            download_only=False,
-        )
-        version = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            type='video',
-            is_primary=True,
-            file_size=300 * 1024 * 1024, # 300MB
-        )
-        
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            assert get_renderer(version).get_preview_mode(version) == 'video'
-
-        version2 = DocumentVersion.objects.create(
-            document=doc,
-            version_number=2,
-            type='video',
-            is_primary=True,
-            file_size=600 * 1024 * 1024, # 600MB
-        )
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            assert get_renderer(version2).get_preview_mode(version2) == 'download_only'
-
-    @patch('documents.models.get_dynamic_setting')
-    def test_dynamic_is_download_only_video_respects_limit(self, mock_get_setting, user):
-        def side_effect(key, default=None):
-            if key == 'MAX_PREVIEW_FILE_SIZE_MB':
-                return 100
-            if key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-                return 500
-            return default
-        mock_get_setting.side_effect = side_effect
-
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            type='video',
-            file_size=600 * 1024 * 1024, # 600MB
-            download_only=False,
-        )
-
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            # Over the 500MB limit, so download_only should be True dynamically
-            assert doc.is_download_only is True
-
-        # Increase limit to 1000MB
-        def side_effect_large(key, default=None):
-            if key == 'MAX_PREVIEW_FILE_SIZE_MB':
-                return 100
-            if key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-                return 1000
-            return default
-        mock_get_setting.side_effect = side_effect_large
-
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            # Within the new 1000MB limit, so download_only should be False dynamically
-            assert doc.is_download_only is False
-
-    @patch('documents.tasks.generate_video_stream_task.delay')
-    @patch('core.services.get_dynamic_setting')
-    @patch('documents.models.get_dynamic_setting')
-    def test_get_effective_render_status_re_evaluates_not_applicable_video(self, mock_models_setting, mock_core_setting, mock_task_delay, user):
-        def side_effect(key, default=None):
-            if key == 'MAX_PREVIEW_FILE_SIZE_MB':
-                return 100
-            if key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-                return 100
-            return default
-        mock_models_setting.side_effect = side_effect
-        mock_core_setting.side_effect = side_effect
-
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            type='video',
-            file_size=200 * 1024 * 1024, # 200MB
-            download_only=True,
-        )
-        version = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            type='video',
-            is_primary=True,
-            file_size=200 * 1024 * 1024,
-            render_status=DocumentVersion.RENDER_NOT_APPLICABLE,
-        )
-
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            assert get_renderer(version).get_effective_render_status(version) == DocumentVersion.RENDER_NOT_APPLICABLE
-
-        # Increase limit to 300MB
-        def side_effect_large(key, default=None):
-            if key == 'MAX_PREVIEW_FILE_SIZE_MB':
-                return 100
-            if key == 'MAX_VIDEO_PREVIEW_SIZE_MB':
-                return 300
-            return default
-        mock_models_setting.side_effect = side_effect_large
-        mock_core_setting.side_effect = side_effect_large
-
-        with override_settings(ENABLE_VIDEO_PREVIEW=True):
-            assert get_renderer(version).enqueue_render_task(version) == DocumentVersion.RENDER_QUEUED
-            assert version.render_status == DocumentVersion.RENDER_QUEUED
-            mock_task_delay.assert_called_once_with(version.id)
 
     @patch('documents.tasks.generate_pdf_pages_task.delay')
     @patch('core.services.get_dynamic_setting')
@@ -514,7 +306,7 @@ class TestPreviewModeServices:
             render_status=DocumentVersion.RENDER_NOT_APPLICABLE,
         )
 
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages'):
+        with override_settings():
             assert get_renderer(version).get_effective_render_status(version) == DocumentVersion.RENDER_NOT_APPLICABLE
 
         # Increase limit to 300MB
@@ -525,7 +317,7 @@ class TestPreviewModeServices:
         mock_models_setting.side_effect = side_effect_large
         mock_core_setting.side_effect = side_effect_large
 
-        with override_settings(PDF_PREVIEW_ENGINE='server_pages'):
+        with override_settings():
             assert get_renderer(version).enqueue_render_task(version) == DocumentVersion.RENDER_QUEUED
             assert version.render_status == DocumentVersion.RENDER_QUEUED
             mock_task_delay.assert_called_once_with(version.id)
@@ -1573,113 +1365,4 @@ class TestDataConsistencyBatch1:
         delete_document_and_files(doc)
         user.refresh_from_db()
         assert user.total_document_size == 0
-
-    @patch('documents.services.safe_delete_storage_file')
-    def test_delete_video_document_deletes_hls_directory(self, mock_safe_delete, user):
-        """
-        Bug 9: Deleting a video document must enqueue the entire _hls directory
-        so orphaned .ts segments are not left on disk.
-        """
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            name="demo.mp4",
-            status="ready",
-            type="video",
-            file_size=1000,
-        )
-        version = DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            original_storage_key="org_1/videos/demo.mp4",
-            storage_key="org_1/videos/demo_hls/playlist.m3u8",
-            type="video",
-            is_primary=True,
-        )
-
-        delete_document_and_files(doc)
-
-        # Check all keys passed to safe_delete_storage_file
-        deleted_keys = {call.args[0] for call in mock_safe_delete.call_args_list}
-        assert "org_1/videos/demo.mp4" in deleted_keys
-        assert "org_1/videos/demo_hls" in deleted_keys
-
-    @patch('documents.services.fileserver_client.delete_file')
-    def test_delete_folder_and_contents_deletes_hls_directory(self, mock_delete_file, user):
-        """
-        Finding 1: Deleting a folder containing video documents must enqueue and delete
-        the entire _hls directory.
-        """
-        from documents.services import delete_folder_and_contents
-
-        folder = Folder.objects.create(
-            organization=user.organization,
-            name="VideoFolder",
-            created_by=user,
-        )
-        doc = Document.objects.create(
-            organization=user.organization,
-            folder=folder,
-            created_by=user,
-            name="demo.mp4",
-            status="ready",
-            type="video",
-            file_size=1000,
-        )
-        DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            original_storage_key=f"{user.organization.id}/videos/demo.mp4",
-            storage_key=f"{user.organization.id}/videos/demo_hls/playlist.m3u8",
-            type="video",
-            is_primary=True,
-        )
-
-        delete_folder_and_contents(folder)
-
-        deleted_keys = {call.args[0] for call in mock_delete_file.call_args_list}
-        assert f"{user.organization.id}/videos/demo.mp4" in deleted_keys
-        assert f"{user.organization.id}/videos/demo_hls" in deleted_keys
-
-    def test_filter_unreferenced_storage_keys_handles_hls_prefix_referencing(self, user):
-        """
-        Finding 2: filter_unreferenced_storage_keys must correctly detect references
-        to an _hls directory prefix.
-        """
-        hls_dir = f"{user.organization.id}/videos/demo_hls"
-        playlist_key = f"{hls_dir}/playlist.m3u8"
-
-        doc = Document.objects.create(
-            organization=user.organization,
-            created_by=user,
-            name="video.mp4",
-            status="ready",
-            type="video",
-            file_size=1000,
-        )
-        DocumentVersion.objects.create(
-            document=doc,
-            version_number=1,
-            original_storage_key=f"{user.organization.id}/videos/video.mp4",
-            storage_key=playlist_key,
-            type="video",
-            is_primary=True,
-        )
-
-        # 1. hls_dir is referenced by doc's version
-        unreferenced = filter_unreferenced_storage_keys({hls_dir}, user.organization.id)
-        assert unreferenced == set(), "hls_dir should be detected as referenced"
-
-        # 2. When doc is excluded, hls_dir becomes unreferenced
-        unreferenced_excluded = filter_unreferenced_storage_keys(
-            {hls_dir}, user.organization.id, exclude_document_ids=[doc.pk]
-        )
-        assert unreferenced_excluded == {hls_dir}
-
-
-
-
-
-
-
 

@@ -3,21 +3,10 @@ import json
 
 DEFAULT_SETTINGS = {
     'MAX_PREVIEW_FILE_SIZE_MB': {'description': 'Max file size in MB for preview generation. Files larger than this will be marked as download-only.', 'type': 'int'},
-    'MAX_VIDEO_PREVIEW_SIZE_MB': {'description': 'Max file size in MB for video preview generation. Files larger than this will be marked as download-only.', 'type': 'int'},
     'MAX_WATERMARK_FILE_SIZE_MB': {'description': 'Max file size in MB for on-the-fly watermark generation. Files larger than this will be restricted.', 'type': 'int', 'min': 0},
     'MAX_PREVIEW_PAGES': {'description': 'Maximum number of pages for document preview. Documents with more pages will be available for download only.', 'type': 'int'},
     'FILE_SIZE_QUOTA_MB': {'description': 'Per-user file size quota in MB. 0 means unlimited.', 'type': 'int'},
     'MAX_FILES_PER_UPLOAD': {'description': 'Maximum number of files allowed in a single upload operation.', 'type': 'int'},
-    'ENABLED_CLOUD_PROVIDERS': {'description': 'JSON list of enabled cloud providers (e.g., ["dropbox"]).', 'type': 'json'},
-    'CLOUD_IMPORT_FOLDER_MAPPING': {'description': 'JSON mapping of provider IDs to default folder names.', 'type': 'json'},
-    'CLOUD_IMPORT_MAX_SIZE_MB': {'description': 'Max file size in MB for cloud imports.', 'type': 'int'},
-    'DROPBOX_APP_KEY': {'description': 'API Key for Dropbox integration.', 'type': 'string'},
-    'DROPBOX_APP_SECRET': {'description': 'API Secret for Dropbox integration.', 'type': 'string'},
-    'GOOGLE_DRIVE_CLIENT_ID': {'description': 'Client ID for Google Drive integration.', 'type': 'string'},
-    'GOOGLE_DRIVE_CLIENT_SECRET': {'description': 'Client Secret for Google Drive integration.', 'type': 'string'},
-    'NEXT_CLOUD_HOST': {'description': 'Host URL for Nextcloud (e.g., https://cloud.example.com).', 'type': 'string'},
-    'NEXT_CLOUD_CLIENT_ID': {'description': 'Client ID for Nextcloud integration.', 'type': 'string'},
-    'NEXT_CLOUD_CLIENT_SECRET': {'description': 'Client Secret for Nextcloud integration.', 'type': 'string'},
     'ENABLE_PUBLIC_SIGNUP': {'description': 'Enable public signup with email verification.', 'type': 'bool'},
     'FLATTEN_WATERMARKED_DOWNLOADS': {'description': 'If true, watermarked PDF downloads are flattened (rasterized to JPEGs and recompiled to PDF) to prevent watermark stripping.', 'type': 'bool'},
 }

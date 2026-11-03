@@ -25,10 +25,10 @@ vi.mock('../../../components/viewer/DataroomDocumentPreview', () => ({
   DataroomDocumentPreview: () => <div>Document Preview</div>,
 }));
 
-vi.mock('../../../components/documents/PdfJsViewer', () => ({
-  PdfJsViewer: ({ dataroomVisitId }) => (
-    <div data-testid="pdfjs-viewer" data-visit-id={dataroomVisitId || ''}>
-      PdfJs Viewer
+vi.mock('../../../components/documents/PreviewViewer', () => ({
+  PreviewViewer: ({ dataroomVisitId }) => (
+    <div data-testid="preview-viewer" data-visit-id={dataroomVisitId || ''}>
+      Preview Viewer
     </div>
   ),
 }));
@@ -434,8 +434,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc1',
             name: 'Stale Doc 1',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         }));
@@ -445,8 +446,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc2',
             name: 'Fresh Doc 2',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -562,8 +564,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc1',
             name: 'Document 1',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -573,8 +576,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc2',
             name: 'Document 2',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -644,8 +648,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc1',
             name: 'Document 1',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -655,8 +660,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc2',
             name: 'Document 2',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -704,7 +710,7 @@ describe('DataroomViewer', () => {
 
     // Wait for Document 2 view data to load and render with visit_doc2
     await waitFor(() => {
-      const viewer = screen.getByTestId('pdfjs-viewer');
+      const viewer = screen.getByTestId('preview-viewer');
       expect(viewer).toHaveAttribute('data-visit-id', 'visit_doc2');
     });
 
@@ -713,7 +719,7 @@ describe('DataroomViewer', () => {
 
     // Ensure doc1's stale response did not overwrite the visit ID on doc2
     await waitFor(() => {
-      const viewer = screen.getByTestId('pdfjs-viewer');
+      const viewer = screen.getByTestId('preview-viewer');
       expect(viewer).toHaveAttribute('data-visit-id', 'visit_doc2');
     });
   });
@@ -736,8 +742,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc1',
             name: 'Document 1',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -816,8 +823,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc1',
             name: 'Document 1',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -947,7 +955,8 @@ describe('DataroomViewer', () => {
             id: 'doc1',
             name: 'First Document',
             type: 'pdf',
-            preview_mode: 'client_pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             link_settings: { allow_download: true },
           },
         });
@@ -1018,8 +1027,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc2',
             name: 'Sub Folder Document',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             num_pages: 14,
             link_settings: { allow_download: true },
           },
@@ -1114,8 +1124,9 @@ describe('DataroomViewer', () => {
           data: {
             id: 'doc2',
             name: 'Sub Folder Document',
-            type: 'document',
-            preview_mode: 'client_pdf',
+            type: 'pdf',
+            preview_mode: 'server_pages',
+            pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
             num_pages: 14,
             link_settings: { allow_download: true },
           },
@@ -1313,9 +1324,10 @@ describe('DataroomViewer', () => {
         {
           id: 'doc-1',
           name: 'Active Document.pdf',
-          type: 'document',
+          type: 'pdf',
           document_type: 'pdf',
-          preview_mode: 'client_pdf',
+          preview_mode: 'server_pages',
+          pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
           file_size: 1048576,
         },
       ],
@@ -1360,9 +1372,10 @@ describe('DataroomViewer', () => {
         {
           id: 'doc-1',
           name: 'Mobile Document.pdf',
-          type: 'document',
+          type: 'pdf',
           document_type: 'pdf',
-          preview_mode: 'client_pdf',
+          preview_mode: 'server_pages',
+          pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
           file_size: 1048576,
         },
       ],
@@ -1393,8 +1406,8 @@ describe('DataroomViewer', () => {
         id: 'doc-watermark',
         name: 'Report.pdf',
         type: 'pdf',
-        preview_mode: 'client_pdf',
-        pdf_preview_url: 'https://example.com/raw-report.pdf',
+        preview_mode: 'server_pages',
+        pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
         link_settings: {
           allow_download: true,
           enable_watermark: true,
@@ -1416,7 +1429,7 @@ describe('DataroomViewer', () => {
                   document_id: 'doc-file-wm',
                   name: 'Report.pdf',
                   document_type: 'pdf',
-                  preview_mode: 'client_pdf',
+                  preview_mode: 'server_pages',
                   file_size: 1024,
                 },
               ],
@@ -1433,7 +1446,6 @@ describe('DataroomViewer', () => {
 
       fireEvent.click(screen.getByTitle('Print document'));
       expect(printPdf).toHaveBeenCalledWith('/api/v1/links/test-slug/download-file/?dataroom_document_id=doc-watermark&view_session_id=view-999&inline=true');
-      expect(printPdf).not.toHaveBeenCalledWith('https://example.com/raw-report.pdf');
     });
 
     it('hides print button when allow_download is false', async () => {
@@ -1441,8 +1453,8 @@ describe('DataroomViewer', () => {
         id: 'doc-no-download',
         name: 'Restricted.pdf',
         type: 'pdf',
-        preview_mode: 'client_pdf',
-        pdf_preview_url: 'https://example.com/raw-restricted.pdf',
+        preview_mode: 'server_pages',
+        pages: [{ page_number: 1, url: 'https://example.com/page-1.png' }],
         link_settings: {
           allow_download: false,
         },
@@ -1462,7 +1474,7 @@ describe('DataroomViewer', () => {
                   document_id: 'doc-file-nd',
                   name: 'Restricted.pdf',
                   document_type: 'pdf',
-                  preview_mode: 'client_pdf',
+                  preview_mode: 'server_pages',
                   file_size: 1024,
                 },
               ],

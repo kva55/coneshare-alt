@@ -3,12 +3,8 @@ name: Build CI
 on:
   push:
     branches: [ "main" ]
-    paths-ignore:
-      - 'portal/**'
   pull_request:
     branches: [ "main" ]
-    paths-ignore:
-      - 'portal/**'
 
 jobs:
   # Job to determine which sub-projects have changes, avoiding unnecessary test runs.
@@ -17,7 +13,6 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
-      mcp: ${{ steps.filter.outputs.mcp }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -33,9 +28,6 @@ jobs:
             - '.github/workflows/build-ci.yml'
           frontend:
             - 'frontend/**'
-            - '.github/workflows/build-ci.yml'
-          mcp:
-            - 'mcp-server/**'
             - '.github/workflows/build-ci.yml'
 
   # Backend testing job (Python/Django tests + Go file server compilation/execution).
@@ -67,12 +59,12 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements*.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
 
     - name: Install dependencies
-      run: pip install -r backend/requirements.txt
+      run: pip install -r backend/requirements-dev.txt
 
     - name: Compile translation catalogs
       run: python backend/compile_po.py
@@ -80,7 +72,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version-file: 'core/go.mod'
 
     - name: Run Go core tests
       working-directory: ./core
@@ -145,66 +137,38 @@ jobs:
       working-directory: ./frontend
       run: npm run test:whitelist
 
-  # MCP testing job (Python unittest under mcp-server/).
-  test-mcp:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.mcp == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - name: Install dependencies
-      working-directory: ./mcp-server
-      run: pip install -e .
-
-    - name: Run MCP server unit tests
-      working-directory: ./mcp-server
-      run: python -m unittest discover -s tests
-
   # Build and push job that runs only on pushes to the main branch.
+  # Images are pushed only when the repository variable DOCKERHUB_NAMESPACE is set
+  # (plus DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets); otherwise images are built but not pushed.
   build-and-push:
-    needs: [detect-changes, test-backend, test-frontend, test-mcp]
+    needs: [detect-changes, test-backend, test-frontend]
     runs-on: ubuntu-latest
-    # Condition explained:
-    # 1. always(): force evaluation even if parent jobs (test-backend/test-frontend/test-mcp) were skipped.
-    # 2. github.event_name == 'push' && github.ref == 'refs/heads/main': restrict execution to pushes on main.
-    # 3. needs.detect-changes.result == 'success': ensure path detection completed successfully.
-    # 4. Result checks: proceed only if tests succeeded OR were skipped (meaning no changes to test).
     if: |
       always() &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       needs.detect-changes.result == 'success' &&
       (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') &&
-      (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') &&
-      (needs.test-mcp.result == 'success' || needs.test-mcp.result == 'skipped')
+      (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped')
+    env:
+      IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Build Docker images
+        run: make dist APP_VERSION=rolling GIT_SHA=${GITHUB_SHA}
+
       - name: Log in to Docker Hub
+        if: env.IMAGE_NAMESPACE != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build Docker images
-        run: make dist APP_VERSION=rolling GIT_SHA=${GITHUB_SHA}
-
-      - name: Tag images
+      - name: Tag and push image
+        if: env.IMAGE_NAMESPACE != ''
         run: |
-          docker tag coneshare:latest conesharedev/coneshare:rolling
-          docker tag coneshare-mcp:latest conesharedev/coneshare-mcp:rolling
-
-      - name: Push images to Docker Hub
-        run: |
-          docker push conesharedev/coneshare:rolling
-          docker push conesharedev/coneshare-mcp:rolling
+          docker tag coneshare:latest "${IMAGE_NAMESPACE}/coneshare:rolling"
+          docker push "${IMAGE_NAMESPACE}/coneshare:rolling"

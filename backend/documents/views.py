@@ -685,10 +685,6 @@ class DocumentPreviewDataView(APIView):
         render_status = serializers.CharField()
         render_error = serializers.CharField(allow_blank=True, allow_null=True)
         pages = serializers.ListField(child=serializers.DictField())
-        pdf_preview_url = serializers.CharField(allow_null=True)
-        video_preview_url = serializers.CharField(allow_null=True)
-        spreadsheet_preview_url = serializers.CharField(allow_null=True)
-        markdown_preview_url = serializers.CharField(allow_null=True)
         download_url = serializers.CharField(allow_null=True)
 
     @extend_schema(
@@ -734,9 +730,6 @@ class DocumentPreviewDataView(APIView):
         render_status = renderer.enqueue_render_task(primary_version)
 
         preview_status = preview_status_for_render_status(render_status)
-        if preview_mode in {'client_pdf', 'markdown'}:
-            preview_status = 'ready'
-
         # Content Processing and Response Shaping
         pages_data = []
         if renderer.should_serve_pages(primary_version, render_status):
@@ -744,44 +737,6 @@ class DocumentPreviewDataView(APIView):
 
         download_url = renderer.get_download_url(document, primary_version, pages_data)
 
-        pdf_preview_url = None
-        if preview_mode == 'client_pdf':
-            try:
-                pdf_preview_url = fileserver_client.generate_preview_url(
-                    primary_version.original_storage_key, is_internal=False
-                )
-            except APIException as e:
-                logger.warning(f"Failed to generate client PDF URL for version {primary_version.id}: {e}")
-                pdf_preview_url = None
-
-        video_preview_url = None
-        if preview_mode == 'video' and render_status == 'ready':
-            try:
-                video_duration = primary_version.length or 0
-                stream_ttl = max(14400, video_duration + 3600)
-                playlist_url = fileserver_client.generate_preview_url(
-                    primary_version.storage_key, is_internal=False, expiry_seconds=stream_ttl
-                )
-                video_preview_url = f"{playlist_url}/playlist.m3u8"
-            except APIException as e:
-                logger.warning(f"Failed to generate client video URL for version {primary_version.id}: {e}")
-                video_preview_url = None
-
-        spreadsheet_preview_url = None
-        if preview_mode == 'spreadsheet' and render_status == 'ready':
-            if hasattr(renderer, 'get_spreadsheet_preview_url'):
-                spreadsheet_preview_url = renderer.get_spreadsheet_preview_url(primary_version)
-
-        markdown_preview_url = None
-        if preview_mode == 'markdown':
-            try:
-                source_key = primary_version.original_storage_key or primary_version.storage_key
-                markdown_preview_url = fileserver_client.generate_preview_url(
-                    source_key, is_internal=False
-                )
-            except APIException as e:
-                logger.warning(f"Failed to generate client Markdown URL for version {primary_version.id}: {e}")
-                markdown_preview_url = None
 
         response_data = {
             "id": document.id,
@@ -793,11 +748,7 @@ class DocumentPreviewDataView(APIView):
             "render_status": render_status,
             "render_error": primary_version.render_error,
             "pages": pages_data,
-            "pdf_preview_url": pdf_preview_url,
-            "video_preview_url": video_preview_url,
-            "spreadsheet_preview_url": spreadsheet_preview_url,
-            "markdown_preview_url": markdown_preview_url,
-            "download_url": download_url,
+                                                            "download_url": download_url,
         }
 
         return Response(response_data, status=status.HTTP_200_OK)
@@ -1037,10 +988,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         primary_version = document.versions.filter(is_primary=True).first()
         pages_map = {}
         if primary_version:
-            if document.type == 'image':
-                image_url = fileserver_client.generate_download_url(primary_version.original_storage_key, is_internal=False)
-                pages_map[1] = image_url
-            elif primary_version.has_pages:
+            if primary_version.has_pages:
                 for page in primary_version.pages.values('page_number', 'storage_key').order_by('page_number'):
                     page_url = fileserver_client.generate_download_url(page['storage_key'], is_internal=False)
                     pages_map[page['page_number']] = page_url

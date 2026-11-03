@@ -12,7 +12,6 @@ from django_cryptography.core.signing import FernetSigner
 from django_cryptography.utils.crypto import FernetBytes, InvalidToken
 
 from automations.models import AutomationDestination
-from cloudfiles.models import CloudConnection
 from core.models import Organization, User
 from documents.models import Document
 from sharelinks.models import ShareLink
@@ -52,10 +51,6 @@ def test_reencrypt_data_models_and_fields_configured():
     assert "ShareLink" in configured_dict
     assert "password" in configured_dict["ShareLink"]
 
-    assert "CloudConnection" in configured_dict
-    assert "access_token" in configured_dict["CloudConnection"]
-    assert "refresh_token" in configured_dict["CloudConnection"]
-
     assert "AutomationDestination" in configured_dict
     assert "signing_secret" in configured_dict["AutomationDestination"]
 
@@ -83,15 +78,7 @@ def test_reencrypt_data_full_key_rotation(monkeypatch):
 
     # 1. Create ShareLink with password
     sl = ShareLink.objects.create(created_by=user, document=doc, password="original_password_xyz")
-    # 2. Create CloudConnection with access_token and refresh_token
-    cc = CloudConnection.objects.create(
-        user=user,
-        provider="google",
-        email="reencrypt@example.com",
-        access_token="initial_access_token",
-        refresh_token="initial_refresh_token",
-    )
-    # 3. Create AutomationDestination with signing_secret
+    # 2. Create AutomationDestination with signing_secret
     ad = AutomationDestination.objects.create(
         organization=org,
         created_by=user,
@@ -111,10 +98,6 @@ def test_reencrypt_data_full_key_rotation(monkeypatch):
             [_raw_encrypt("original_password_xyz"), sl.id],
         )
         cursor.execute(
-            "UPDATE cloudfiles_cloudconnection SET access_token = %s, refresh_token = %s WHERE id = %s",
-            [_raw_encrypt("initial_access_token"), _raw_encrypt("initial_refresh_token"), cc.id],
-        )
-        cursor.execute(
             "UPDATE automations_automationdestination SET signing_secret = %s WHERE id = %s",
             [_raw_encrypt("initial_webhook_secret"), ad.id],
         )
@@ -132,13 +115,9 @@ def test_reencrypt_data_full_key_rotation(monkeypatch):
     out_val = out.getvalue()
     assert "Successfully processed and re-encrypted" in out_val
 
-    # Reload records and confirm all 4 fields are now cleanly decrypted with current secret key
+    # Reload records and confirm all fields are now cleanly decrypted with current secret key
     sl_reloaded = ShareLink.objects.get(id=sl.id)
     assert sl_reloaded.password == "original_password_xyz"
-
-    cc_reloaded = CloudConnection.objects.get(id=cc.id)
-    assert cc_reloaded.access_token == "initial_access_token"
-    assert cc_reloaded.refresh_token == "initial_refresh_token"
 
     ad_reloaded = AutomationDestination.objects.get(id=ad.id)
     assert ad_reloaded.signing_secret == "initial_webhook_secret"
@@ -155,18 +134,12 @@ def test_reencrypt_data_handles_null_values_and_invalid_tokens():
     # ShareLink with null password
     sl = ShareLink.objects.create(created_by=user, document=doc, password=None)
 
-    # CloudConnection with null refresh_token and corrupted access_token
-    cc = CloudConnection.objects.create(
-        user=user,
-        provider="dropbox",
-        email="reencrypt2@example.com",
-        access_token="temporary_access",
-        refresh_token=None,
-    )
+    # ShareLink with a corrupted (undecryptable) password
+    sl_bad = ShareLink.objects.create(created_by=user, document=doc, password="temporary")
     with connection.cursor() as cursor:
         cursor.execute(
-            "UPDATE cloudfiles_cloudconnection SET access_token = %s WHERE id = %s",
-            [b"not-a-valid-token", cc.id],
+            "UPDATE sharelinks_sharelink SET password = %s WHERE id = %s",
+            [b"not-a-valid-token", sl_bad.id],
         )
 
     out = io.StringIO()
@@ -174,7 +147,7 @@ def test_reencrypt_data_handles_null_values_and_invalid_tokens():
     call_command("reencrypt_data", old_key=old_secret, stdout=out, stderr=err)
 
     out_val = out.getvalue()
-    assert "Skipping CloudConnection" in out_val
+    assert "Skipping ShareLink" in out_val
 
     # Null password should remain None
     sl_reloaded = ShareLink.objects.get(id=sl.id)

@@ -5,7 +5,7 @@ import { useUser } from '../contexts/UserProvider';
 import { toast } from 'sonner';
 import { useBreadcrumb } from '../components/layout/BreadcrumbProvider';
 import { Loader2, AlertTriangle, Shield } from 'lucide-react';
-import { renameDocument, getDocumentDetails, getDocumentStatus, getDocumentViews, getDocumentStats, deleteShareLink, uploadNewVersion, getDocumentDownloadUrl, deleteDocument, getDataroom, getDataroomFolderContents, getCloudProviders, getCloudConnections, getDropboxConnectUrl, getGoogleDriveConnectUrl, getNextcloudConnectUrl, refreshCloudDocument, importCloudVersion } from '../services/api';
+import { renameDocument, getDocumentDetails, getDocumentStatus, getDocumentViews, getDocumentStats, deleteShareLink, uploadNewVersion, getDocumentDownloadUrl, deleteDocument, getDataroom, getDataroomFolderContents } from '../services/api';
 import { getLocalizedErrorMessage } from '../utils/errorTranslator';
 import { DocumentHeader } from '../components/documents/DocumentHeader';
 import { LinksTable } from '../components/documents/LinksTable';
@@ -16,7 +16,6 @@ import { LinkSheet } from '../components/links/LinkSheet';
 import { DocumentPreviewModal } from '../components/documents/DocumentPreviewModal';
 import { ConfirmationDialog } from '../components/dialogs/ConfirmationDialog';
 import { OwnerQnAManager } from '../components/qna/OwnerQnAManager';
-import { CloudImportDialog } from '../components/dialogs/CloudImportDialog';
 
 export function DocumentPage() {
   const { t } = useTranslation();
@@ -42,27 +41,6 @@ export function DocumentPage() {
   const fileInputRef = useRef(null);
   const [isVersionMismatchDialogOpen, setIsVersionMismatchDialogOpen] = useState(false);
   const [newVersionFile, setNewVersionFile] = useState(null);
-  const [cloudProviders, setCloudProviders] = useState([]);
-  const [cloudConnections, setCloudConnections] = useState([]);
-  const [isCloudImportOpen, setIsCloudImportOpen] = useState(false);
-  const [activeCloudImport, setActiveCloudImport] = useState(null);
-
-  useEffect(() => {
-    const fetchProviders = async () => {
-      try {
-        const [providersRes, connectionsRes] = await Promise.all([
-          getCloudProviders(),
-          getCloudConnections(),
-        ]);
-        setCloudProviders(providersRes.data);
-        setCloudConnections(connectionsRes.data);
-      } catch (error) {
-        console.error("Failed to fetch cloud providers or connections:", error);
-      }
-    };
-    fetchProviders();
-  }, []);
-
   useEffect(() => {
     const action = searchParams.get('action');
     if (action === 'share') {
@@ -351,74 +329,6 @@ export function DocumentPage() {
     fileInputRef.current?.click();
   };
 
-  const handleCloudProviderClick = async (provider) => {
-    if (provider.is_connected) {
-      const connection = cloudConnections.find(c => c.provider === provider.name);
-      if (connection) {
-        setActiveCloudImport({ provider, connection });
-        setIsCloudImportOpen(true);
-      } else {
-        toast.error(`Could not find connection details for ${provider.display_name}. Please try again or reconnect.`);
-      }
-    } else {
-      try {
-        let response;
-        if (provider.name === 'dropbox') {
-          response = await getDropboxConnectUrl();
-        } else if (provider.name === 'google_drive') {
-          response = await getGoogleDriveConnectUrl();
-        } else if (provider.name === 'nextcloud') {
-          response = await getNextcloudConnectUrl();
-        } else {
-          toast.error(`Connecting to ${provider.display_name} is not supported yet.`);
-          return;
-        }
-        window.location.href = response.data.authorization_url;
-      } catch (error) {
-        console.error(`Failed to get ${provider.display_name} connect URL:`, error);
-      }
-    }
-  };
-
-  const handleImportCloudVersion = async (connectionId, { fileId, fileName, fileSize }) => {
-    const toastId = toast.loading(`Importing new version: ${fileName}...`);
-    try {
-      const response = await importCloudVersion(documentId, { connectionId, fileId, fileName, fileSize });
-      toast.success('New cloud version import started successfully. Processing has begun.', { id: toastId });
-      refreshUser(); // Refresh user quota
-      setDocument(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          status: response.data.status,
-          status_message: response.data.status_message
-        };
-      });
-    } catch (error) {
-      toast.dismiss(toastId);
-      throw error;
-    }
-  };
-
-  const handleRefreshFromCloud = async () => {
-    const toastId = toast.loading('Syncing latest version from cloud...');
-    try {
-      const response = await refreshCloudDocument(documentId);
-      toast.success('Sync started. The document is being updated in the background.', { id: toastId });
-      refreshUser(); // Refresh user quota
-      setDocument(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          status: response.data.status,
-          status_message: response.data.status_message
-        };
-      });
-    } catch (error) {
-      toast.dismiss(toastId);
-    }
-  };
-
   if (loading) {
     return (
       <div className="space-y-6 p-6">
@@ -478,14 +388,11 @@ export function DocumentPage() {
         onCreateLink={handleCreateLink}
         onPreview={handlePreview}
         onUploadNewVersion={handleUploadNewVersionClick}
-        onImportVersionFromCloud={handleCloudProviderClick}
-        onRefreshFromCloud={handleRefreshFromCloud}
         onDownload={handleDownload}
         onVersionHistory={() => navigate(`/documents/${documentId}/versions`)}
         onDelete={handleDelete}
         onRenameDocument={handleRenameDocument}
         isProcessing={isProcessing}
-        cloudProviders={cloudProviders}
         canManage={canManage}
       />
       <div className="mt-8 space-y-8">
@@ -567,14 +474,6 @@ export function DocumentPage() {
         title="File Type Mismatch"
         description={`The file you selected has a different type than the original document. Are you sure you want to replace it with "${newVersionFile?.name}"?`}
         confirmText="Upload"
-      />
-      <CloudImportDialog
-        isOpen={isCloudImportOpen}
-        onOpenChange={setIsCloudImportOpen}
-        provider={activeCloudImport?.provider}
-        connection={activeCloudImport?.connection}
-        onImportSuccess={() => {}}
-        onImport={handleImportCloudVersion}
       />
     </div>
   );

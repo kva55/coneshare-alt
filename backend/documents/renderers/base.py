@@ -70,7 +70,7 @@ class BasePreviewRenderer(ABC):
 
     @abstractmethod
     def get_preview_mode(self, version: DocumentVersion) -> str:
-        """Returns the viewer mode string (e.g. 'image', 'server_pages', 'client_pdf', 'download_only')."""
+        """Returns the viewer mode string ('server_pages' or 'download_only')."""
         pass
 
     def enqueue_render_task(self, version: DocumentVersion) -> str:
@@ -144,9 +144,8 @@ class BasePreviewRenderer(ABC):
         Dispatches the format-specific Celery task.
 
         Must be implemented by subclasses that rely on the default enqueue_render_task
-        template method (e.g., PDFRenderer, OfficeRenderer, VideoRenderer, TranscodedImageRenderer).
-        Synchronous renderers that do not dispatch background tasks (e.g., DirectImageRenderer,
-        GenericFileRenderer) override enqueue_render_task directly and do not need to implement this.
+        template method (e.g., PDFRenderer).
+        Synchronous renderers that do not dispatch background tasks (e.g., GenericFileRenderer) override enqueue_render_task directly and do not need to implement this.
         """
         raise NotImplementedError(
             f"{self.__class__.__name__} inherits the default enqueue_render_task but does not implement _dispatch_task."

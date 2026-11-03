@@ -66,7 +66,6 @@ This repository is a multi-service monorepo.
 - `backend/`: Django + DRF API, Celery tasks, and tests (`tests/`, `bdd/`).
 - `core/`: Go file service (`main.go`) for secure file operations.
 - `frontend/`: Vite + React SPA (`src/pages`, `src/components`, `src/services`).
-- `portal/`: Next.js marketing/docs site (`app/`, `components/`).
 - `e2e/`: Playwright end-to-end tests.
 - `docs/` and `plans/`: Architecture notes and feature plans.
 
@@ -75,12 +74,11 @@ Run Docker-based workflows from the root folder unless working inside a single p
 - `make build` / `make up` / `make down` - Manage full Docker stack.
 - `make migrate` - Run Django migrations.
 - `make test` / `make test.front` - Run backend/frontend container test suites.
-- `make lint.portal` / `make logs` - Lint portal or stream service logs.
+- `make lint.docs` / `make logs` - Check feature docs or stream service logs.
 - `make logs`: follow service logs.
 
 Local package fallbacks:
 - `cd frontend && npm run dev|build|test|lint`
-- `cd portal && npm run dev|build|lint`
 - `cd e2e && npm test`
 
 ## Coding Style & Naming Conventions
@@ -100,11 +98,11 @@ PRs should include:
 - clear summary and motivation;
 - linked issue (if applicable);
 - test evidence (`make test` or targeted command output; or `make test.front` for whitelisted tests);
-- UI screenshots/GIFs for frontend or portal changes;
+- UI screenshots/GIFs for frontend changes;
 - migration/config notes when schema or env vars change.
 - **Git workflow rule**: Do not execute `git add` or `git commit` commands directly/eagerly, unless the user explicitly asks you to do so.
 
 ## Security & Configuration
 - Copy `.env.template` to `.env`. Never commit secrets.
-- Re-check access control paths when changing share links, dataroom permissions, upload/download, or cloud provider integrations.
+- Re-check access control paths when changing share links, dataroom permissions, or upload/download.
 - Report security issues privately via `dev@coneshare.com`.

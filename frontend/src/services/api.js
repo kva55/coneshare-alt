@@ -565,49 +565,6 @@ export const replayAutomationDelivery = (deliveryId) =>
 
 export const getShareLinks = () => api.get('/share-links/');
 
-// Cloud Imports
-export const getCloudProviders = () => api.get('/cloud/providers/');
-
-export const getCloudConnections = () => api.get('/cloud/connections/');
-
-export const deleteCloudConnection = (connectionId) => api.delete(`/cloud/connections/${connectionId}/`);
-
-export const getDropboxConnectUrl = () => api.get('/cloud/connect/dropbox/');
-
-export const getGoogleDriveConnectUrl = () => api.get('/cloud/connect/google_drive/');
-
-export const getNextcloudConnectUrl = () => api.get('/cloud/connect/nextcloud/');
-
-export const completeDropboxConnect = ({ code, state }) =>
-  api.post('/cloud/callback/dropbox/', { code, state });
-
-export const completeGoogleDriveConnect = ({ code, state }) =>
-  api.post('/cloud/callback/google_drive/', { code, state });
-
-export const completeNextcloudConnect = ({ code, state }) =>
-  api.post('/cloud/callback/nextcloud/', { code, state });
-
-export const listCloudFiles = (connectionId, path = '/') =>
-  api.get(`/cloud/connections/${connectionId}/list/`, { params: { path } });
-
-export const importCloudFile = (connectionId, { fileId, fileName, fileSize }) =>
-  api.post(`/cloud/connections/${connectionId}/import/`, {
-    file_id: fileId,
-    file_name: fileName,
-    file_size: fileSize,
-  });
-
-export const refreshCloudDocument = (documentId) =>
-  api.post(`/cloud/documents/${documentId}/refresh/`);
-
-export const importCloudVersion = (documentId, { connectionId, fileId, fileName, fileSize }) =>
-  api.post(`/cloud/documents/${documentId}/import_version/`, {
-    connection_id: connectionId,
-    file_id: fileId,
-    file_name: fileName,
-    file_size: fileSize,
-  });
-
 // Datarooms
 export const getDatarooms = (params) => api.get('/datarooms/', { params });
 export const getDataroom = (id, params) => api.get(`/datarooms/${id}/`, { params });
@@ -773,28 +730,6 @@ export const downloadDataroomArchive = (slug, viewSessionId = null) => {
   link.remove();
 };
 
-// File Requests
-export const getFileRequests = (page = 1) => api.get(`/file-requests/?page=${page}`);
-export const getFileRequest = (id) => api.get(`/file-requests/${id}/`);
-export const createFileRequest = (data) => api.post('/file-requests/', data);
-export const updateFileRequest = (id, data) => api.patch(`/file-requests/${id}/`, data);
-export const deleteFileRequest = (id) => api.delete(`/file-requests/${id}/`);
-
-// Public File Requests
-export const getPublicFileRequest = (slug) => api.get(`/public/file-requests/${slug}/`);
-export const requestPublicUpload = (slug, data) => api.post(`/public/file-requests/${slug}/request-upload/`, data);
-export const finalizePublicUpload = (slug, data) => api.post(`/public/file-requests/${slug}/finalize-upload/`, data);
-
-export const listCloudFolders = (connectionId, path = '/') =>
-  api.get(`/cloud/connections/${connectionId}/folders/`, { params: { path } });
-
-export const exportFileRequestUploads = (requestId, data) =>
-  api.post(`/file-requests/${requestId}/exports/`, data);
-
-export const getFileRequestExports = (requestId) =>
-  api.get(`/file-requests/${requestId}/exports/`);
-
-
 // Admin
 export const getAdminBranding = () => api.get('/admin/organization/');
 export const updateAdminBranding = (data) => api.patch('/admin/organization/', data, {
@@ -821,13 +756,6 @@ export const deleteAdminUser = (id) => api.delete(`/admin/users/${id}/`);
 export const recalculateAdminUserQuota = (id) => api.post(`/admin/users/${id}/recalculate-quota/`);
 export const resetAdminUserPassword = (id, data) => api.post(`/admin/users/${id}/reset-password/`, data);
 export const getAdminLoginActivities = (page = 1) => api.get(`/admin/login-activities/?page=${page}`);
-export const getAdminSecurityThreatEvents = ({ page = 1, status = '', severity = '', eventType = '' } = {}) => {
-  const params = { page };
-  if (status) params.status = status;
-  if (severity) params.severity = severity;
-  if (eventType) params.event_type = eventType;
-  return api.get('/admin/security-threat-events/', { params });
-};
 export const getAdminDatarooms = (params = {}) => api.get('/admin/datarooms/', { params });
 export const getAdminDataroom = (id) => api.get(`/admin/datarooms/${id}/`);
 export const updateAdminDataroom = (id, data) => api.patch(`/admin/datarooms/${id}/`, data);

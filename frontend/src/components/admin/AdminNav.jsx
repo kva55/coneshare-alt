@@ -11,7 +11,6 @@ export function AdminNav() {
     { to: '/admin/users', label: t('admin.users') },
     { to: '/admin/datarooms', label: t('admin.datarooms') },
     { to: '/admin/login-activity', label: t('admin.loginActivity') },
-    { to: '/admin/security-alerts', label: t('admin.securityAlerts') },
   ];
 
   return (

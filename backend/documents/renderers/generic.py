@@ -6,8 +6,8 @@ from .base import BasePreviewRenderer
 
 class GenericFileRenderer(BasePreviewRenderer):
     """
-    Fallback renderer for unrenderable, download-only file formats
-    (e.g. archives, executables, SVGs).
+    Fallback renderer for every non-PDF format. Such files are stored but
+    never previewed in the browser.
     """
 
     @classmethod

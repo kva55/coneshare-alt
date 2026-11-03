@@ -8,6 +8,11 @@ jobs:
   tag-and-push-docker-image:
     name: Build and Push Release Docker Image
     runs-on: ubuntu-latest
+    # Requires the repository variable DOCKERHUB_NAMESPACE and the
+    # DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets.
+    if: vars.DOCKERHUB_NAMESPACE != ''
+    env:
+      IMAGE_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
@@ -24,83 +29,8 @@ jobs:
         env:
           VERSION: ${{ github.event.release.tag_name }}
         run: |
-          CLEAN_VERSION=$(echo $VERSION | sed 's/^v//')
+          CLEAN_VERSION=$(echo "$VERSION" | sed 's/^v//')
           SHORT_SHA=$(git rev-parse --short=10 HEAD)
-          make dist APP_VERSION=$CLEAN_VERSION GIT_SHA=$SHORT_SHA
-          docker tag coneshare:latest conesharedev/coneshare:$CLEAN_VERSION
-          docker tag coneshare-mcp:latest conesharedev/coneshare-mcp:$CLEAN_VERSION
-          docker push conesharedev/coneshare:$CLEAN_VERSION
-          docker push conesharedev/coneshare-mcp:$CLEAN_VERSION
-
-  update-compose-repository:
-    name: Update Coneshare Compose Repository
-    runs-on: ubuntu-latest
-    needs: tag-and-push-docker-image
-    steps:
-      - name: Checkout coneshare-compose repository
-        uses: actions/checkout@v4
-        with:
-          repository: coneshare/coneshare-compose
-          token: ${{ secrets.GH_PAT }}
-          path: coneshare-compose
-
-      - name: Set up Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      
-      - name: Update compose file and create PR
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          # Extracts the version number from the git tag (e.g., v1.0.0 -> 1.0.0)
-          VERSION: ${{ github.event.release.tag_name }}
-        run: |
-          CLEAN_VERSION=$(echo $VERSION | sed 's/^v//')
-          cd coneshare-compose
-          git checkout -b "release-${CLEAN_VERSION}"
-          sed -i "s|CONESHARE_IMAGE=conesharedev/coneshare:rolling|CONESHARE_IMAGE=conesharedev/coneshare:${CLEAN_VERSION}|" .env
-          sed -i "s|CONESHARE_MCP_IMAGE=conesharedev/coneshare-mcp:rolling|CONESHARE_MCP_IMAGE=conesharedev/coneshare-mcp:${CLEAN_VERSION}|" .env
-          sed -i "s|SENTRY_RELEASE=rolling|SENTRY_RELEASE=${CLEAN_VERSION}|" app.env.example
-          git add .env app.env.example
-          git commit -m "release: ${CLEAN_VERSION}"
-          git push origin "release-${CLEAN_VERSION}"
-          
-          gh pr create \
-            --repo coneshare/coneshare-compose \
-            --base main \
-            --head "release-${CLEAN_VERSION}" \
-            --title "Release ${CLEAN_VERSION}" \
-            --body "Automated release for version ${CLEAN_VERSION}"
-          
-          gh pr merge "release-${CLEAN_VERSION}" \
-            --repo coneshare/coneshare-compose \
-            --merge \
-            --delete-branch
-
-      - name: Create Release in coneshare-compose
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          VERSION: ${{ github.event.release.tag_name }}
-        run: |
-          CLEAN_VERSION=$(echo $VERSION | sed 's/^v//')
-          gh release create "${VERSION}" \
-            --repo coneshare/coneshare-compose \
-            --title "${CLEAN_VERSION}" \
-            --notes "Deployment configuration for Coneshare ${VERSION}" \
-            --target main
-      
-      - name: Update main branch back to rolling
-        env:
-          VERSION: ${{ github.event.release.tag_name }}
-        run: |
-          CLEAN_VERSION=$(echo $VERSION | sed 's/^v//')
-          cd coneshare-compose
-          git fetch origin
-          git checkout main
-          git reset --hard origin/main 
-          sed -i "s|CONESHARE_IMAGE=conesharedev/coneshare:${CLEAN_VERSION}|CONESHARE_IMAGE=conesharedev/coneshare:rolling|" .env
-          sed -i "s|CONESHARE_MCP_IMAGE=conesharedev/coneshare-mcp:${CLEAN_VERSION}|CONESHARE_MCP_IMAGE=conesharedev/coneshare-mcp:rolling|" .env
-          sed -i "s|SENTRY_RELEASE=${CLEAN_VERSION}|SENTRY_RELEASE=rolling|" app.env.example
-          git add .env app.env.example
-          git commit -m "build: Set main version back to rolling"
-          git push origin main
+          make dist APP_VERSION="$CLEAN_VERSION" GIT_SHA="$SHORT_SHA"
+          docker tag coneshare:latest "${IMAGE_NAMESPACE}/coneshare:${CLEAN_VERSION}"
+          docker push "${IMAGE_NAMESPACE}/coneshare:${CLEAN_VERSION}"

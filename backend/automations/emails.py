@@ -139,10 +139,6 @@ def _build_show_details_url(payload: dict) -> str:
     if document_id:
         return f"{settings.SITE_DOMAIN}/documents/{document_id}"
 
-    file_request_id = payload.get('file_request_id')
-    if file_request_id:
-        return f"{settings.SITE_DOMAIN}/file-requests/{file_request_id}"
-
     return f"{settings.SITE_DOMAIN}/analytics/view-sessions"
 
 
@@ -270,17 +266,114 @@ def _send_standard_fallback_email(owner, recipient_email: str, delivery: Automat
 
         # Determine standard fallback headline
         headline = _("Activity alert: %(target)s") % {'target': target}
-        if event_type == 'file_request_uploaded':
-            uploader = tasks._display_actor(payload.get('uploaded_by_name'), payload.get('uploaded_by_email'), fallback=_("Someone"))
-            req_name = payload.get('file_request_name') or _("file request")
-            headline = _('%(uploader)s uploaded a file to your file request "%(req_name)s"') % {
-                'uploader': uploader,
-                'req_name': req_name,
-            }
-        elif event_type == 'file_request_malware_detected':
-            headline = _('Malware detected in your file request')
-        elif event_type == 'file_request_scan_failed':
-            headline = _('Malware scanning failed')
+
+        subject = headline
+
+        # Fetch detailed file view stats (duration and completion rates).
+        # To isolate statistics only to the current active segment window (and exclude older
+        # activity already alerted on), we find the creation time of the earliest delivery
+        # in the current coalesced batch and apply a tiny 5-second buffer.
+        earliest_delivery = min(pending_deliveries, key=lambda d: d.created_at)
+        since_datetime = earliest_delivery.created_at - timedelta(seconds=5)
+        stats = _get_session_completion_stats(view_session_id, since_datetime=since_datetime)
+        activity_stats_html = list(stats.values())
+        activity_stats_txt = [f"- {item['name']}: {item['value']}" for item in stats.values()]
+
+        event_dt_str = payload.get('event_datetime')
+        viewed_at = None
+        if event_dt_str:
+            try:
+                viewed_at = parse_datetime(event_dt_str)
+            except Exception:
+                pass
+        if not viewed_at:
+            viewed_at = first_delivery.created_at
+
+        if timezone.is_naive(viewed_at):
+            viewed_at = timezone.make_aware(viewed_at, timezone.utc)
+
+        city = payload.get('visitor_city')
+        country = payload.get('visitor_country')
+        location = f"{city}, {country}" if city and country else _("Unknown Location")
+
+        # Query ViewSession to resolve visitor OS and browser metadata
+        os_name, browser_name = _("Unknown OS"), _("Unknown Browser")
+        if view_session_id:
+            try:
+                vs = ViewSession.objects.filter(id=view_session_id).first()
+                if vs and vs.user_agent:
+                    parsed_os, parsed_browser = parse_user_agent(vs.user_agent)
+                    os_name = parsed_os or _("Unknown OS")
+                    browser_name = parsed_browser or _("Unknown Browser")
+            except Exception as e:
+                logger.warning('Failed to query ViewSession for user agent: %s', e)
+
+        context = {
+            'owner_name': owner.name or '',
+            'target_name': target_name,
+            'headline': headline,
+            'viewer_email': viewer_email,
+            'viewed_at': viewed_at,
+            'ip_address': payload.get('visitor_ip'),
+            'location': location,
+            'os': os_name,
+            'browser': browser_name,
+            'activity_stats': activity_stats_html,
+            'activity_stats_txt': activity_stats_txt,
+            'show_details_url': _build_show_details_url(payload) if view_session_id else None,
+        }
+
+        # Send coalesced email
+        try:
+            try:
+                display_timezone = ZoneInfo(settings.DISPLAY_TIME_ZONE)
+            except Exception:
+                display_timezone = ZoneInfo('UTC')
+
+            with timezone.override(display_timezone):
+                text_content = render_to_string('sharelinks/view_notification_email.txt', context)
+                html_content = render_to_string('sharelinks/view_notification_email.html', context)
+
+            send_mail(
+                subject=subject,
+                message=text_content,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[recipient_email],
+                fail_silently=False,
+                html_message=html_content
+            )
+            logger.info('Sent coalesced view notification email to %s for session %s.', recipient_email, view_session_id)
+            
+            # Mark successful deliveries atomically
+            with transaction.atomic():
+                for d in pending_deliveries:
+                    d.attempt_count += 1
+                    d.status = AutomationDelivery.Status.SUCCESS
+                    d.response_code = 200
+                    d.response_body_excerpt = f'Sent email successfully to {recipient_email}'
+                    d.delivered_at = timezone.now()
+                    d.next_retry_at = None
+                    d.save(update_fields=['attempt_count', 'status', 'response_code', 'response_body_excerpt', 'delivered_at', 'next_retry_at', 'updated_at'])
+        except Exception as e:
+            logger.error('Failed to send coalesced email notification for session %s: %s', view_session_id, e)
+            # Revert PROCESSING status on failure so it can retry
+            with transaction.atomic():
+                for d in pending_deliveries:
+                    tasks._mark_failure_and_retry(d, f'Failed to send email: {e}')
+
+
+def _send_standard_fallback_email(owner, recipient_email: str, delivery: AutomationDelivery):
+    payload = delivery.payload or {}
+    owner_lang = getattr(owner, 'language', 'en') or 'en'
+
+    with translation_override(owner_lang):
+        target = tasks._target_description(payload)
+        event_type = delivery.event_type
+        event_text = tasks._build_event_sentence(event_type, payload)
+        viewer_email = payload.get('viewer_email') or _("Anonymous")
+
+        # Determine standard fallback headline
+        headline = _("Activity alert: %(target)s") % {'target': target}
 
         subject = headline
         
