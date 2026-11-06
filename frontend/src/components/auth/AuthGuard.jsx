@@ -8,11 +8,16 @@ import { LandingPage } from '../../pages/LandingPage';
 export function AuthGuard() {
   const location = useLocation();
   const [status, setStatus] = useState('checking'); // 'checking' | 'authenticated' | 'anonymous'
+  const [mustChange, setMustChange] = useState(false);
 
   useEffect(() => {
     let active = true;
     getSession()
-      .then(() => active && setStatus('authenticated'))
+      .then((response) => {
+        if (!active) return;
+        setMustChange(Boolean(response?.data?.must_change_password));
+        setStatus('authenticated');
+      })
       .catch(() => active && setStatus('anonymous'));
     return () => {
       active = false;
@@ -35,6 +40,11 @@ export function AuthGuard() {
     // The public index: sign in, or request files. Everything else behind sign-in redirects to the login page.
     if (location.pathname === '/') return <LandingPage />;
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // A password somebody else knows (generated at setup, or set by an administrator) must be replaced first.
+  if (mustChange && location.pathname !== '/settings/password') {
+    return <Navigate to="/settings/password" state={{ forced: true }} replace />;
   }
 
   return <Outlet />;

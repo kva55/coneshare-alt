@@ -24,12 +24,15 @@ Needs Docker with the Compose plugin and `openssl`.
 ./quickstart.sh
 ```
 
-It builds the stack, creates `.env` with fresh secrets, makes an internal CA and certificates in `./certs`, generates the storage key, runs migrations and creates an admin account (the address and a random password are printed at the end). Open `https://localhost:8443` and import `certs/ca.crt` into your browser to trust it.
+It builds the stack, creates `.env` with fresh secrets, makes an internal CA and certificates in `./certs`, generates the storage key and runs migrations. The first time, it **asks for the administrator's e-mail address** and creates that account with a generated 16-character password (upper and lower case, digits and symbols) that is **shown once** in the terminal. You must change it at first sign-in: nothing else works until you do. (Without a terminal, give the address in advance: `ADMIN_EMAIL=you@example.org ./quickstart.sh`.) Running `./quickstart.sh` again leaves the account alone (`./quickstart.sh reset-admin` makes a new one). Open `https://localhost:8443` and import `certs/ca.crt` into your browser to trust it.
 
-There is no mail server in the stack: e-mails (access codes, sign-in links, approval requests) are printed in the backend log (`./quickstart.sh logs`) until you configure your own under *Admin > Notifications > E-mail setup* or `EMAIL_*` in `.env`.
+There is no mail server in the normal stack: e-mails (access codes, sign-in links, approval requests) are printed in the backend log (`./quickstart.sh logs`) until you configure your own under *Admin > Notifications > E-mail setup* or `EMAIL_*` in `.env`. To try the e-mail features without one, `./quickstart.sh testmail-demo` adds a demo mail server and webmail with three accounts (see below).
 
 | Command | |
 |---|---|
+| `./quickstart.sh` | normal start |
+| `./quickstart.sh testmail-demo` | add a demo mail server and webmail: `admin@lab.local` (app admin), `user@lab.local` (app member), `guest@lab.local` (mailbox only). Password generated and shown once. Details in [testmail-demo.sh](testmail-demo.sh) |
+| `./quickstart.sh reset-admin` | ask for an administrator address again and set a new generated password |
 | `./quickstart.sh test` | backend, frontend and Go tests, in the containers |
 | `./quickstart.sh check` | migrations match the models |
 | `./quickstart.sh encrypt-existing` | encrypt files stored before encryption was on |

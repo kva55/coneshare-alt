@@ -77,13 +77,27 @@ def enforce_csrf(request):
         raise exceptions.PermissionDenied(f'CSRF Failed: {reason}')
 
 
+# What a user who must change their password may still call.
+PASSWORD_CHANGE_ALLOWED_PATHS = ('/api/v1/auth/me/', '/api/v1/token/logout/', '/api/v1/users/set-password/')
+
+
+def require_password_change_gate(user, request):
+    """Refuse everything else until the password has been changed (code ``password_change_required``)."""
+    if getattr(user, 'must_change_password', False) and request.path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+        raise exceptions.PermissionDenied(
+            {'detail': 'You must change your password before continuing.', 'code': 'password_change_required'})
+
+
 class CookieJWTAuthentication(JWTAuthentication):
     """Authenticate with the Authorization header if present, otherwise with the access cookie."""
 
     def authenticate(self, request):
         header = self.get_header(request)
         if header is not None:
-            return super().authenticate(request)
+            result = super().authenticate(request)
+            if result is not None:
+                require_password_change_gate(result[0], request)
+            return result
 
         raw_token = request.COOKIES.get(access_cookie_name())
         if not raw_token:
@@ -92,4 +106,5 @@ class CookieJWTAuthentication(JWTAuthentication):
         validated_token = self.get_validated_token(raw_token)
         user = self.get_user(validated_token)
         enforce_csrf(request)
+        require_password_change_gate(user, request)
         return user, validated_token

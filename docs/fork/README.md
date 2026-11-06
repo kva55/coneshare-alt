@@ -10,7 +10,7 @@ This is a hardened, minimal fork of Coneshare for sharing sensitive documents. I
 ./quickstart.sh          # builds, creates .env, certificates and keys, migrates, creates accounts
 ```
 
-Open `https://localhost:8443` (import `certs/ca.crt` to trust it). The admin account and its password are printed at the end of `./quickstart.sh`. There is no mail server in the stack; e-mails are printed in the backend log (see [testing-checklist.md](testing-checklist.md)).
+Open `https://localhost:8443` (import `certs/ca.crt` to trust it). The admin account and its password are printed at the end of `./quickstart.sh`. On the first start it asks for the administrator's address and shows a generated password once, which must be changed at first sign-in. There is no mail server in the normal stack; e-mails are printed in the backend log, and `./quickstart.sh testmail-demo` adds a demo mail server and webmail (see [testing-checklist.md](testing-checklist.md)).
 
 ## Controls
 

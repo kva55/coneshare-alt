@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # coneshare-alt local test stack.
 #
-#   ./quickstart.sh            build + start everything, migrate, create the admin account
+#   ./quickstart.sh            normal start: build + start everything, migrate; the first time it asks for the
+#                              admin e-mail address and shows a generated password once (change it at first sign-in)
+#   ./quickstart.sh reset-admin   ask for an admin address again and set a new generated password
+#   ./quickstart.sh testmail-demo add a demo mail server and webmail with admin@lab.local, user@lab.local and
+#                              guest@lab.local (see testmail-demo.sh); optional, for trying e-mail features
 #   ./quickstart.sh test       run backend (pytest), frontend (lint + vitest) and Go tests in the containers
 #   ./quickstart.sh check      verify the hand-written migrations match the models (makemigrations --check)
 #   ./quickstart.sh encrypt-existing   encrypt files stored before encryption was on
@@ -15,43 +19,17 @@
 # To remove containers, images, all data and this folder: ./quickclose.sh
 #
 # This is a development/test setup (Django runserver, DEBUG=True). E-mail is printed in the backend log
-# unless you configure your own mail server (Admin > Notifications > E-mail setup, or EMAIL_* in .env).
+# unless you configure your own mail server (Admin > Notifications > E-mail setup, or EMAIL_* in .env)
+# or start the demo mail server (./quickstart.sh testmail-demo).
 # Do not expose it to a network you do not trust.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@coneshare.local}"
-# ADMIN_PASSWORD: set it to choose one; otherwise a random one is generated on each start and printed at the end.
 ORG_NAME="${ORG_NAME:-Default Organization}"
 STORAGE_DIR="${HOME}/.coneshare-data"   # mounted by docker-compose.yml into the core service
-export COMPOSE_PROJECT_NAME=coneshare
-export COMPOSE_FILE="docker-compose.yml"
-# TLS is on unless switched off with TLS=off, or (when TLS is not given) the existing .env says it is off.
-if [[ -z "${TLS:-}" && -f .env ]] && grep -q '^SITE_DOMAIN=http://' .env; then TLS=off; fi
-if [[ "${TLS:-on}" == "off" ]]; then
-  export COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.plain.yml"
-else
-  export COMPOSE_PROFILES=tls   # the HTTPS front door (nginx)
-fi
-
-log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
-
-if docker compose version >/dev/null 2>&1; then
-  DC=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  DC=(docker-compose)
-else
-  die "Docker Compose not found. Install Docker Engine with the compose plugin."
-fi
-docker info >/dev/null 2>&1 || die "Cannot talk to the Docker daemon (is it running? are you in the docker group / using sudo?)."
-
-random_secret() {
-  if command -v openssl >/dev/null 2>&1; then openssl rand -hex 32
-  else python3 -c 'import secrets; print(secrets.token_hex(32))'; fi
-}
+# log/warn/die, compose and TLS detection, random_secret, gen_password, create_app_user
+. scripts/common.sh
 
 ensure_env() {
   if [[ -f .env ]]; then
@@ -105,15 +83,6 @@ ensure_encryption_env() {
   fi
 }
 
-set_env() {  # set_env KEY VALUE: replace the line in .env or append it
-  local key="$1" value="$2"
-  if grep -q "^${key}=" .env; then
-    sed -i.bak -e "s|^${key}=.*|${key}=${value}|" .env && rm -f .env.bak
-  else
-    printf '%s=%s\n' "${key}" "${value}" >> .env
-  fi
-}
-
 wait_for_core() {
   log "Waiting for the file service (core) to finish compiling and listen on :8080..."
   local i
@@ -150,38 +119,33 @@ wait_for_backend() {
   die "Backend did not come up. See the log output above."
 }
 
+admin_exists() {
+  [[ "$("${DC[@]}" exec -T backend python manage.py shell -c "from core.models import User; print(User.objects.filter(role='admin', is_active=True).count())" 2>/dev/null | tail -1 | tr -d '[:space:]')" -gt 0 ]] 2>/dev/null
+}
+
+# Ask who the administrator is, make them an account with a generated password, and show it once.
 create_admin() {
-  log "Creating/updating admin account ${ADMIN_EMAIL}"
-  "${DC[@]}" exec -T \
-    -e QS_ADMIN_EMAIL="${ADMIN_EMAIL}" \
-    -e QS_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
-    -e QS_ORG_NAME="${ORG_NAME}" \
-    backend python manage.py shell -c '
-import os
-from core.models import Organization, User
-email = os.environ["QS_ADMIN_EMAIL"].strip().lower()
-org = Organization.objects.order_by("created_at").first()
-if org is None:
-    org = Organization.objects.create(name=os.environ["QS_ORG_NAME"])
-user, created = User.objects.get_or_create(
-    email=email,
-    defaults={"username": email, "organization": org, "name": "Admin"},
-)
-user.organization = user.organization or org
-user.role = "admin"
-user.is_staff = True
-user.is_superuser = True
-user.is_active = True
-user.set_password(os.environ["QS_ADMIN_PASSWORD"])
-user.save()
-print(("created" if created else "updated"), user.email, "in organization", user.organization.name)
-'
+  local email="${ADMIN_EMAIL:-}"
+  if [[ -z "${email}" ]]; then
+    [[ -t 0 ]] || die "No admin address: run this from a terminal, or set ADMIN_EMAIL=you@example.org"
+    while :; do
+      read -r -p "E-mail address for the administrator account: " email
+      email="$(printf '%s' "${email}" | tr -d '[:space:]')"
+      valid_email "${email}" && break
+      warn "That does not look like an e-mail address. Try again."
+    done
+  elif ! valid_email "${email}"; then
+    die "ADMIN_EMAIL is not a valid e-mail address: ${email}"
+  fi
+  ADMIN_EMAIL="${email}"
+  ADMIN_PASSWORD="$(gen_password)"
+  create_app_user "${ADMIN_EMAIL}" "${ADMIN_PASSWORD}" admin Admin 1
+  NEW_ADMIN=1
 }
 
 cmd_up() {
   ensure_env
   ensure_encryption_env
-  ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(random_secret | cut -c1-20)}"
   mkdir -p "${STORAGE_DIR}"
   log "Building and starting containers"
   "${DC[@]}" up -d --build
@@ -211,7 +175,17 @@ print('file service reachable at', settings.CORE_API_URL)
     log "Encrypting files that were stored before encryption was switched on"
     "${DC[@]}" exec -T core go run . -encrypt-existing || warn "Converting existing files failed; they are still served as they were. Re-run: ./quickstart.sh encrypt-existing"
   fi
-  create_admin
+  if admin_exists; then
+    log "An administrator account already exists; leaving it as it is (./quickstart.sh reset-admin sets a new one)."
+  else
+    create_admin
+  fi
+  local ADMIN_BLOCK="    Administrator: the account you created earlier (./quickstart.sh reset-admin sets a new one)."
+  if [[ "${NEW_ADMIN:-0}" == 1 ]]; then
+    ADMIN_BLOCK="    Administrator account (SHOWN ONCE: write it down; you must change it at first sign-in)
+      E-mail:    ${ADMIN_EMAIL}
+      Password:  ${ADMIN_PASSWORD}"
+  fi
   local APP_URL="https://localhost:${HTTPS_PORT:-8443}"
   [[ "${TLS:-on}" == "off" ]] && APP_URL="http://localhost:5173 (TLS is OFF)"
   cat <<EOF
@@ -225,14 +199,12 @@ print('file service reachable at', settings.CORE_API_URL)
     Encryption: files at rest AES-256-GCM (key in .env: back it up), TLS at the front door, to the
     file service and to Redis. Details: docs/fork/container-security.md
 
-    Admin account
-      ${ADMIN_EMAIL}   password: ${ADMIN_PASSWORD}   (shown once: set ADMIN_PASSWORD yourself to choose it)
-
+${ADMIN_BLOCK}
   E-mail (access codes, sign-in links, approval requests) is printed in the backend log until you
   configure a mail server:   ./quickstart.sh logs
   Your own mail server: Admin > Notifications > E-mail setup, or EMAIL_* in .env.
 
-  Other commands: ./quickstart.sh test | check | stop | reset
+  Other commands: ./quickstart.sh test | check | stop | reset | reset-admin | testmail-demo
   Remove everything (containers, images, data, this folder): ./quickclose.sh
 EOF
 }
@@ -268,7 +240,7 @@ cmd_reset() {
   [[ "${ans}" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
   "${DC[@]}" down -v || true
   rm -f backend/db.sqlite3 .env
-  rm -rf certs
+  rm -rf certs .testmail-demo
   rm -rf "${STORAGE_DIR}"
   log "Reset complete."
 }
@@ -281,5 +253,12 @@ case "${1:-up}" in
   logs)     "${DC[@]}" logs -f ;;
   stop)     "${DC[@]}" stop ;;
   reset)    cmd_reset ;;
-  *)        sed -n '2,14p' "$0"; exit 1 ;;
+  reset-admin)
+    "${DC[@]}" exec -T backend true >/dev/null 2>&1 || die "Stack is not running. Run ./quickstart.sh first."
+    create_admin
+    printf '\n  Administrator account (SHOWN ONCE: write it down; you must change it at first sign-in)\n    E-mail:    %s\n    Password:  %s\n\n' "${ADMIN_EMAIL}" "${ADMIN_PASSWORD}" ;;
+  testmail-demo)
+    "${DC[@]}" exec -T backend true >/dev/null 2>&1 || cmd_up
+    exec ./testmail-demo.sh "${@:2}" ;;
+  *)        sed -n '2,20p' "$0"; exit 1 ;;
 esac

@@ -93,6 +93,12 @@ api.interceptors.response.use(
 
     const originalRequest = error.config;
 
+    // A generated or administrator-set password must be replaced before anything else works.
+    if (error.response?.status === 403 && error.response?.data?.code === 'password_change_required'
+        && typeof window !== 'undefined' && window.location.pathname !== '/settings/password') {
+      window.location.assign('/settings/password?forced=1');
+    }
+
     // Visitor-side /checkout calls answer 401 themselves ("sign in"); the page handles it, and
     // there is no staff session to refresh.
     const checkoutPath = (originalRequest?.url || '').replace(/^(\/api\/v1)?\//, '');

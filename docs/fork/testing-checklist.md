@@ -2,11 +2,8 @@
 
 None of this could be *run* where it was written (no Docker, Node, Go or Django
 there). Start with `./quickstart.sh check` (migrations match models) and `./quickstart.sh test`
-(all suites), and expect to fix small things the first time. Log in with the admin account
-`./quickstart.sh` prints at the end (`admin@coneshare.local` and a random password; set `ADMIN_PASSWORD` to
-choose one). There is no mail server in the stack: e-mails are printed to the backend log
-(`./quickstart.sh logs`), which is where access codes, sign-in links and invitations appear. To send real
-e-mail, configure your own server (see *E-mail* below).
+(all suites), and expect to fix small things the first time. On the first start `./quickstart.sh` asks for the administrator's e-mail address and prints a generated password once. Sign in with it: you are sent to *Settings > Password* and nothing else works until you choose your own (check: while the notice is showing, calling any other API URL answers `403` with code `password_change_required`; after the change you are signed out and sign in again). Without a mail server, e-mails are printed to the backend log
+(`./quickstart.sh logs`), which is where access codes, sign-in links and invitations appear. To try the e-mail features, run `./quickstart.sh testmail-demo` (see *E-mail* below); to send real e-mail, configure your own server.
 
 ## Core security
 
@@ -146,7 +143,13 @@ What this does **not** do (it cannot): hide pixels from the browser that is allo
 
 ## E-mail
 
-There is no mail server in the stack. By default the app prints every e-mail to the backend log:
+### Demo mail server (`./quickstart.sh testmail-demo`)
+
+Starts a mail server and Roundcube (webmail, http://localhost:8081) next to the stack and points the app's outgoing mail at it. It creates `admin@lab.local` (application admin and mailbox), `user@lab.local` (application member and mailbox) and `guest@lab.local` (**mailbox only**, no application account, for use as a share-link viewer or check-out guest). One generated password, shown once, for all three. `./testmail-demo.sh check` sends a test message through the app and confirms it arrives; `./testmail-demo.sh down` removes the demo and puts e-mail back to the backend log. Demo only: no TLS, no spam filtering; its files are in the git-ignored `.testmail-demo/`.
+
+### Without it
+
+There is no mail server in the normal stack. By default the app prints every e-mail to the backend log:
 `./quickstart.sh logs` and look for the `Subject:` line. To use your own mail server, set it in
 *Admin > Notifications > E-mail setup* (host, port, credentials, sender) or `EMAIL_*` in `.env`.
 
@@ -154,7 +157,7 @@ Checks:
 1. *E-mail setup > Send test e-mail to me* reaches your inbox.
 2. The page has an explicit *Allow an unencrypted connection* opt-in (without it TLS is required and passwords are never sent unencrypted) and an *Inbox check* (IMAP) that sends and receives a test message.
 3. The app refuses outbound connections to private addresses (SSRF protection). If your mail server is on a private network, list that network in `OUTBOUND_ALLOWED_NETWORKS` in `.env`.
-4. Allow-list test: as admin, share a document, add a guest address to the allow-list: an invitation e-mail is produced. Open the link in a private window, enter the guest's address: an access code e-mail is produced. Enter an address that is not listed: the same message appears, nothing is sent, and *Request denied* shows in the access log.
+4. Allow-list test: as admin, share a document, add a guest address (with the demo, `guest@lab.local`) to the allow-list: an invitation e-mail is produced. Open the link in a private window, enter the guest's address: an access code e-mail is produced. Enter an address that is not listed: the same message appears, nothing is sent, and *Request denied* shows in the access log.
 
 ## Sign-in notice and check-out session reports
 

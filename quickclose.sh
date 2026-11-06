@@ -5,7 +5,7 @@
 #   ./quickclose.sh --keep-code  same, but keep this project folder (source code + git history)
 #   ./quickclose.sh -y ...       do not ask for confirmation
 #
-# What gets deleted:
+# What gets deleted (including the demo mail server of ./quickstart.sh testmail-demo, if it was started):
 #   - all coneshare containers, networks and named volumes (redis data)
 #   - all images used by the stack (coneshare:dev, coneshare:frontend, the core image, redis, nginx)
 #   - ~/.coneshare-data            uploaded files stored by the Go file service
@@ -19,6 +19,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 STORAGE_DIR="${HOME}/.coneshare-data"
 export COMPOSE_PROJECT_NAME=coneshare
 export COMPOSE_FILE="docker-compose.yml:docker-compose.plain.yml"   # including the TLS-off override
+[[ -f .testmail-demo/docker-compose.yml ]] && export COMPOSE_FILE="${COMPOSE_FILE}:.testmail-demo/docker-compose.yml"   # and the mail demo, if it was started
 export COMPOSE_PROFILES=tls   # the HTTPS front door (proxy) is in a profile; without this `down` would leave it running
 
 KEEP_CODE=0
@@ -90,7 +91,7 @@ fi
 if [[ $KEEP_CODE -eq 1 ]]; then
   log "Deleting local database, uploads and .env (keeping source code)"
   rm -f backend/db.sqlite3 backend/db.sqlite3-journal backend/db.sqlite3-wal backend/db.sqlite3-shm .env
-  rm -rf certs
+  rm -rf certs .testmail-demo
   find backend/media -mindepth 1 ! -name .gitkeep -exec rm -rf {} + 2>/dev/null || sudo find backend/media -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
   log "Done. Source code kept in ${PROJECT_DIR}."
 else

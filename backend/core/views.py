@@ -226,7 +226,10 @@ class SetPasswordView(APIView):
             if not user.check_password(old_password):
                 return Response({"old_password": [_("Wrong password.")]}, status=status.HTTP_400_BAD_REQUEST)
 
+            if user.check_password(serializer.validated_data['new_password1']):
+                return Response({"new_password1": [_("Choose a password you have not used before.")]}, status=status.HTTP_400_BAD_REQUEST)
             user.set_password(serializer.validated_data['new_password1'])
+            user.must_change_password = False
             user.save()
             blacklist_all_user_tokens(user)
             return Response(status=status.HTTP_204_NO_CONTENT)

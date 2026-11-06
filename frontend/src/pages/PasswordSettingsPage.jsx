@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Button } from '../components/ui/Button';
@@ -12,6 +12,8 @@ import { SettingsTabs } from '../components/settings/SettingsTabs';
 function PasswordSettingsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
+  const forced = Boolean(location.state?.forced) || new URLSearchParams(location.search).get('forced') === '1';
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -54,6 +56,12 @@ function PasswordSettingsPage() {
     <div className="p-4 sm:mx-4 sm:pt-8">
       <div className="mx-auto max-w-3xl">
         <h1 className="text-2xl font-bold mb-6">{t('settings.title')}</h1>
+        {forced && (
+          <p role="alert" data-testid="forced-change"
+             className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            {t('settings.mustChangePassword', { defaultValue: 'You are using a password that was generated for you and shown once. Choose your own now: nothing else is available until you do.' })}
+          </p>
+        )}
         <SettingsTabs />
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">

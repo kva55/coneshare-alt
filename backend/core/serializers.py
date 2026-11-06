@@ -119,12 +119,12 @@ class UserSerializer(serializers.ModelSerializer):
             'id', 'email', 'name', 'role', 'organization',
             'avatar', 'avatar_url', 'language', 'date_joined', 'updated_at',
             'total_document_size', 'file_size_quota_mb', 'custom_file_size_quota_mb', 'max_files_per_upload',
-            'is_superuser', 'is_active'
+            'is_superuser', 'is_active', 'must_change_password'
         ]
         read_only_fields = [
             'id', 'email', 'role', 'organization', 'date_joined', 'updated_at', 'avatar_url',
             'total_document_size', 'file_size_quota_mb', 'custom_file_size_quota_mb', 'max_files_per_upload',
-            'is_superuser', 'is_active'
+            'is_superuser', 'is_active', 'must_change_password'
         ]
         extra_kwargs = {
             'avatar': {'write_only': True, 'required': False}

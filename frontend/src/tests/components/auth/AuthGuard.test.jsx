@@ -105,4 +105,26 @@ describe('AuthGuard', () => {
     );
     expect(await screen.findByText('Dashboard')).toBeInTheDocument();
   });
+
+  it('sends a user who must change their password to the password page', async () => {
+    api.getSession.mockResolvedValue({ data: { must_change_password: true } });
+    render(
+      <MemoryRouter initialEntries={['/protected']}>
+        <Routes>
+          <Route element={<AuthGuard />}>
+            <Route path="/protected" element={<div>Protected Dashboard Content</div>} />
+            <Route path="/settings/password" element={<div>Password page</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(await screen.findByText('Password page')).toBeInTheDocument();
+    expect(screen.queryByText('Protected Dashboard Content')).toBeNull();
+  });
+
+  it('lets everyone else through', async () => {
+    api.getSession.mockResolvedValue({ data: { must_change_password: false } });
+    renderWithRouter('/protected');
+    expect(await screen.findByText('Protected Dashboard Content')).toBeInTheDocument();
+  });
 });
