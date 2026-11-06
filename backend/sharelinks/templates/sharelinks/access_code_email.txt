@@ -1,0 +1,12 @@
+{% autoescape off %}Hello,
+
+Someone asked for access to "{{ target_name }}".
+
+Your one-time access code is:
+
+    {{ code }}
+
+Enter it at {{ view_url }}
+
+The code works once and expires in {{ ttl_minutes }} minutes. If you did not ask for access, ignore this email: nobody can open the document without this code.
+{% endautoescape %}

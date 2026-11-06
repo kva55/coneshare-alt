@@ -221,3 +221,28 @@ def image_document_with_content(user):
         content_type="image/gif"
     )
     return document
+
+
+@pytest.fixture(autouse=True)
+def allowlist_policy_off_by_default(settings):
+    """Existing tests exercise the other gates; allow-list tests opt in explicitly."""
+    settings.SHARELINK_REQUIRE_ALLOWLIST = False
+
+
+@pytest.fixture(autouse=True)
+def local_memory_cache(settings):
+    """Tests must not depend on (or leak into) Redis: use an isolated in-process cache."""
+    from django.core.cache import cache
+    settings.CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+    cache.clear()
+    yield
+    cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def clear_page_caches():
+    """The page caches live in process memory; tests must not see each other's pages."""
+    from sharelinks.protected_pages import clear_page_caches
+    clear_page_caches()
+    yield
+    clear_page_caches()

@@ -22,6 +22,7 @@ import { PlusIcon } from '../icons/PlusIcon';
 export function DocumentHeader({
   document,
   onCreateLink,
+  onAccessSettings,
   onPreview,
   onDownload,
   onDelete,
@@ -143,6 +144,12 @@ export function DocumentHeader({
               )}
             </TooltipContent>
           </Tooltip>
+
+          {canManage && onAccessSettings && (
+            <Button variant="outline" className="mr-2" onClick={onAccessSettings}>
+              {t('documents.accessSettings', { defaultValue: 'Access settings' })}
+            </Button>
+          )}
 
           {canManage && (
             <Button className="mr-2" onClick={onCreateLink} disabled={isProcessing}>

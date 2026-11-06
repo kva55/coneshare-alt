@@ -4,8 +4,14 @@ import { PreviewViewer } from '../../../components/documents/PreviewViewer';
 import * as api from '../../../services/api';
 
 // Mock child components
-vi.mock('../../../components/documents/LazyImage', () => ({
-  LazyImage: ({ src, alt }) => <img src={src} alt={alt} data-testid="lazy-image" />,
+// The real PageCanvas needs canvas + createImageBitmap; the viewer logic under test only
+// needs a stand-in that renders the overlays (children) inside the page container.
+vi.mock('../../../components/documents/PageCanvas', () => ({
+  PageCanvas: ({ alt, pageNumber, children }) => (
+    <div data-testid="page-canvas" data-page={pageNumber} aria-label={alt}>
+      {children}
+    </div>
+  ),
 }));
 
 // Mock API service
@@ -32,9 +38,9 @@ beforeAll(() => {
 describe('PreviewViewer', () => {
   const mockDocumentData = {
     pages: [
-      { page_number: 1, url: '/page1.png' },
-      { page_number: 2, url: '/page2.png' },
-      { page_number: 3, url: '/page3.png' },
+      { page_number: 1 },
+      { page_number: 2 },
+      { page_number: 3 },
     ],
   };
   const mockOnPageChange = vi.fn();
@@ -63,9 +69,9 @@ describe('PreviewViewer', () => {
   };
 
   const getPageElement = (pageNumber) => {
-    // Our mock LazyImage doesn't have the dataset, so we find the parent div.
-    const image = screen.getByAltText(`Page ${pageNumber}`);
-    return image.parentElement;
+    // Our mock PageCanvas doesn't carry the dataset; its parent is the page container.
+    const canvas = screen.getAllByTestId('page-canvas').find((el) => el.dataset.page === String(pageNumber));
+    return canvas.parentElement;
   };
 
   const triggerIntersection = (pageNumber, isIntersecting = true, intersectionRatio = 0.8) => {
@@ -80,10 +86,10 @@ describe('PreviewViewer', () => {
 
   it('should render all pages from documentData', () => {
     renderComponent();
-    expect(screen.getAllByTestId('lazy-image')).toHaveLength(3);
-    expect(screen.getByAltText('Page 1')).toBeInTheDocument();
-    expect(screen.getByAltText('Page 2')).toBeInTheDocument();
-    expect(screen.getByAltText('Page 3')).toBeInTheDocument();
+    expect(screen.getAllByTestId('page-canvas')).toHaveLength(3);
+    expect(screen.getByLabelText('Page 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('Page 2')).toBeInTheDocument();
+    expect(screen.getByLabelText('Page 3')).toBeInTheDocument();
   });
 
   it('should not reset scroll when the same document receives a fresh pages array', () => {
@@ -91,8 +97,8 @@ describe('PreviewViewer', () => {
       id: 'doc_1',
       name: 'Document 1',
       pages: [
-        { page_number: 1, url: '/page1.png' },
-        { page_number: 2, url: '/page2.png' },
+        { page_number: 1 },
+        { page_number: 2 },
       ],
     };
     const { container, rerender } = renderComponent({ documentData });
@@ -120,7 +126,7 @@ describe('PreviewViewer', () => {
     const documentData = {
       id: 'doc_1',
       name: 'Document 1',
-      pages: [{ page_number: 1, url: '/page1.png' }],
+      pages: [{ page_number: 1 }],
     };
     const { container, rerender } = renderComponent({ documentData });
     const scrollContainer = container.firstChild;
@@ -132,7 +138,7 @@ describe('PreviewViewer', () => {
         documentData={{
           id: 'doc_2',
           name: 'Document 2',
-          pages: [{ page_number: 1, url: '/other-page1.png' }],
+          pages: [{ page_number: 1 }],
         }}
         zoomLevel={1}
         onPageChange={mockOnPageChange}
@@ -394,7 +400,6 @@ describe('PreviewViewer', () => {
       pages: [
         {
           page_number: 1,
-          url: '/page1.png',
           page_links: {
             links: [
               {
@@ -436,7 +441,6 @@ describe('PreviewViewer', () => {
       pages: [
         {
           page_number: 1,
-          url: '/page1.png',
           page_links: {
             links: [
               {
@@ -490,7 +494,6 @@ describe('PreviewViewer', () => {
       pages: [
         {
           page_number: 1,
-          url: '/page1.png',
           text_content: {
             lines: [
               {
@@ -543,7 +546,6 @@ describe('PreviewViewer', () => {
       pages: [
         {
           page_number: 1,
-          url: '/page1.png',
           text_content: {
             lines: [
               {
@@ -571,12 +573,10 @@ describe('PreviewViewer', () => {
       pages: [
         {
           page_number: 1,
-          url: '/page1.png',
           text_content: { lines: [] },
         },
         {
           page_number: 2,
-          url: '/page2.png',
         },
       ],
     };
@@ -592,7 +592,6 @@ describe('PreviewViewer', () => {
       pages: [
         {
           page_number: 1,
-          url: '/page1.png',
           text_content: {
             lines: [
               {

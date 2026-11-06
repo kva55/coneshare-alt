@@ -726,3 +726,57 @@ func TestDeleteFileHandler_HLSFolderRecursively(t *testing.T) {
 	}
 }
 
+
+func TestOverwriteFileDestroysContentAndKeepsNothingReadable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secret.bin")
+	secret := []byte(strings.Repeat("TOP-SECRET-CONTENT ", 5000))
+	if err := os.WriteFile(path, secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// keep a handle on the same inode to see what is left in it after the overwrite
+	if err := overwriteFile(path); err != nil {
+		t.Fatalf("overwrite failed: %v", err)
+	}
+	left, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(left), "TOP-SECRET") {
+		t.Fatal("plaintext survived the overwrite")
+	}
+}
+
+func TestDeleteFileHandlerSecureOverwritesThenRemoves(t *testing.T) {
+	dir := t.TempDir()
+	key := "uploads/doc.pdf"
+	full := filepath.Join(dir, key)
+	_ = os.MkdirAll(filepath.Dir(full), 0o755)
+	_ = os.WriteFile(full, []byte("sensitive"), 0o600)
+	body := strings.NewReader(`{"storage_key":"` + key + `","secure":true}`)
+	rec := httptest.NewRecorder()
+	deleteFileHandler(Config{StoragePath: dir})(rec, httptest.NewRequest(http.MethodPost, "/delete-file", body))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(full); !os.IsNotExist(err) {
+		t.Fatal("file still exists")
+	}
+}
+
+func TestOverwriteSkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	_ = os.WriteFile(target, []byte("keep me"), 0o600)
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	if err := overwriteFile(link); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "keep me" {
+		t.Fatal("a symlink target was overwritten")
+	}
+}

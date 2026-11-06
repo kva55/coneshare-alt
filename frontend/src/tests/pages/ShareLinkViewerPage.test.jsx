@@ -94,7 +94,7 @@ describe('ShareLinkViewerPage', () => {
     name: 'Test Document',
     type: 'pdf',
     num_pages: 3,
-    pages: [{ page_number: 1, url: '/page1.png' }],
+    pages: [{ page_number: 1 }],
     link_settings: { id: 'link_abc', allow_download: true },
   };
 

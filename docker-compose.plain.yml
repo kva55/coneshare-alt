@@ -1,0 +1,6 @@
+# Only used with `TLS=off ./quickstart.sh`: publishes the dev server over plain HTTP on localhost.
+# The default stack has no plain-HTTP way in; use it only on a machine you trust.
+services:
+  frontend:
+    ports:
+      - "127.0.0.1:5173:5173"

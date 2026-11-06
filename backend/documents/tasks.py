@@ -218,6 +218,9 @@ def generate_pdf_pages_task(version_id):
                 if getattr(image, 'mode', None) in ('RGBA', 'LA', 'P'):
                     image = image.convert('RGB')
 
+                size = getattr(image, 'size', None)
+                page_width, page_height = size if isinstance(size, tuple) and len(size) == 2 else (None, None)
+
                 buffer = BytesIO()
                 image.save(buffer, 'JPEG')
                 image.close()
@@ -233,7 +236,10 @@ def generate_pdf_pages_task(version_id):
                     page_number=page_num,
                     storage_key=page_storage_key,
                     page_links=page_links_by_num.get(page_num, {"links": []}),
-                    metadata={"text_content": page_text_by_num.get(page_num, {"lines": []})},
+                    metadata={
+                        "text_content": page_text_by_num.get(page_num, {"lines": []}),
+                        **({"width": page_width, "height": page_height} if page_width and page_height else {}),
+                    },
                 )
         except Exception:
             # Pages are uploaded as they are rendered, so a failure part-way through

@@ -1,0 +1,5 @@
+Your request was {{ decision }}
+
+File: {{ file_name }}
+{% if approved %}
+Sign in at {{ url }} and open the file. The request is kept for {{ hours }} hours.{% endif %}

@@ -87,17 +87,17 @@ jobs:
     - name: Run Go file server in background
       run: ./file-server &
       env:
-        INTERNAL_API_TOKEN: "dummy-internal-api-token-for-ci"
+        INTERNAL_API_TOKEN: "ci-internal-api-token-0123456789abcdef0123456789"
         STORAGE_PATH: "/tmp/storage"      
 
     - name: Run tests
       run: pytest backend --maxfail=2
       env:
-        SECRET_KEY: "dummy-secret-key-for-ci-tests"
+        SECRET_KEY: "ci-secret-key-0123456789abcdef0123456789abcdef"
         DATABASE_URL: "sqlite:///db.sqlite3"
         REDIS_URL: "redis://localhost:6379"
         CELERY_TASK_ALWAYS_EAGER: "True"
-        INTERNAL_API_TOKEN: "dummy-internal-api-token-for-ci"
+        INTERNAL_API_TOKEN: "ci-internal-api-token-0123456789abcdef0123456789"
         FIELD_ENCRYPTION_KEY: "S-c9WBE3DEJE2R7i-b-sOmegRChW2McTDIOWcrG0-C8="
         CORE_API_URL: "http://localhost:8080"
 

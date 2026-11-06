@@ -1,0 +1,5 @@
+You have been given access to files
+
+{{ inviter }} has given you access to the files in "{{ datastore }}".
+
+To see them, open {{ url }}, enter this email address and follow the link we send you.

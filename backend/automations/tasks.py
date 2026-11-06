@@ -1,428 +1,99 @@
-import hashlib
-import hmac
 import json
 import logging
-from datetime import timedelta
-from urllib.parse import urlparse
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-import requests
 import socket
-from celery import shared_task
-from django.conf import settings
-from django.utils.dateparse import parse_datetime
-from django.utils import timezone
-from django.utils.translation import gettext as _, override as translation_override
+from datetime import timedelta
 
-from core.ssrf import (
-    validate_outbound_url,
-    DestinationResolutionError,
-    FORBIDDEN_WEBHOOK_HEADERS,
-)
-from .models import AutomationDelivery
+from celery import shared_task
+from django.utils import timezone
+from rest_framework import serializers
+
+from core.ssrf import (DestinationResolutionError, OutboundRequestError, pinned_request,
+                       validate_outbound_url)
+
+from .constants import (BASE_RETRY_SECONDS, MAX_DELIVERY_ATTEMPTS, RESPONSE_EXCERPT_LIMIT)
+from .crypto import sign_body
+from .models import WebhookDelivery
 from .services import dispatch_automation_event
-from .emails import handle_email_delivery
 
 logger = logging.getLogger(__name__)
 
-MAX_DELIVERY_ATTEMPTS = 3
-BASE_RETRY_SECONDS = 60
-RESPONSE_EXCERPT_LIMIT = 200
-MAX_CHAT_CUSTOM_FIELD_LINES = 5
-
-
-def _build_signature(secret: str, payload: dict) -> str:
-    body = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
-    digest = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()
-    return f'sha256={digest}'
-
-
-def _build_headers(delivery: AutomationDelivery, request_payload: dict) -> dict:
-    headers = {'Content-Type': 'application/json'}
-    if isinstance(delivery.destination.headers, dict):
-        clean_custom_headers = {
-            k: v for k, v in delivery.destination.headers.items()
-            if str(k).strip().lower() not in FORBIDDEN_WEBHOOK_HEADERS
-        }
-        headers.update(clean_custom_headers)
-
-    if delivery.idempotency_key:
-        headers['X-Coneshare-Idempotency-Key'] = delivery.idempotency_key
-
-    if delivery.destination.signing_secret:
-        headers['X-Coneshare-Signature'] = _build_signature(delivery.destination.signing_secret, request_payload)
-
-    return headers
-
-
-def _display_actor(name: str | None, email: str | None, fallback: str | None = None) -> str:
-    name = (name or '').strip()
-    email = (email or '').strip()
-    if name and email:
-        return f'{name} <{email}>'
-    if email:
-        return email
-    if name:
-        return name
-    return fallback if fallback is not None else _('Anonymous')
-
-
-def _target_description(payload: dict) -> str:
-    document_name = payload.get('document_name')
-    dataroom_name = payload.get('dataroom_name')
-    dataroom_folder_name = payload.get('dataroom_folder_name')
-
-    if document_name:
-        if dataroom_folder_name and dataroom_name:
-            return _('document "%(document_name)s" in folder "%(folder_name)s" in dataroom "%(dataroom_name)s"') % {
-                'document_name': document_name,
-                'folder_name': dataroom_folder_name,
-                'dataroom_name': dataroom_name,
-            }
-        if dataroom_name:
-            return _('document "%(document_name)s" in dataroom "%(dataroom_name)s"') % {
-                'document_name': document_name,
-                'dataroom_name': dataroom_name,
-            }
-        return _('document "%(document_name)s"') % {'document_name': document_name}
-    if dataroom_folder_name and dataroom_name:
-        return _('folder "%(folder_name)s" in dataroom "%(dataroom_name)s"') % {
-            'folder_name': dataroom_folder_name,
-            'dataroom_name': dataroom_name,
-        }
-    if dataroom_folder_name:
-        return _('folder "%(folder_name)s"') % {'folder_name': dataroom_folder_name}
-    if dataroom_name:
-        return _('dataroom "%(dataroom_name)s"') % {'dataroom_name': dataroom_name}
-    return _('item')
-
-
-def _format_event_time(value: str | None) -> str | None:
-    if not value:
-        return None
-
-    parsed = parse_datetime(value)
-    if not parsed:
-        return value
-    if timezone.is_naive(parsed):
-        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
-
-    try:
-        display_timezone = ZoneInfo(settings.DISPLAY_TIME_ZONE)
-    except ZoneInfoNotFoundError:
-        display_timezone = ZoneInfo('UTC')
-
-    return timezone.localtime(parsed, display_timezone).strftime('%b %-d, %Y, %-I:%M %p')
-
-
-def _approximate_location(payload: dict) -> str | None:
-    city = (payload.get('visitor_city') or '').strip()
-    country = (payload.get('visitor_country') or '').strip()
-
-    if city and country:
-        return f'{city}, {country}'
-    if city:
-        return city
-    if country:
-        return country
-    return None
-
-
-def _append_event_details(message: str, payload: dict) -> str:
-    details = []
-    event_time = _format_event_time(payload.get('event_datetime'))
-    location = _approximate_location(payload)
-
-    if event_time:
-        details.append(f'{_("Time:")} {event_time}')
-    if location:
-        details.append(f'{_("Approximate location:")} {location}')
-
-    if not details:
-        return message
-    return f'{message}\n' + '\n'.join(details)
-
-
-def _append_custom_field_summary(message: str, payload: dict) -> str:
-    values = payload.get('custom_field_values')
-    if not isinstance(values, dict) or not values:
-        return message
-
-    lines = []
-    for key, value in list(values.items())[:MAX_CHAT_CUSTOM_FIELD_LINES]:
-        label = str(key).replace('_', ' ').strip().title() or key
-        lines.append(f'{label}: {value}')
-
-    remaining_count = len(values) - len(lines)
-    if remaining_count > 0:
-        lines.append(_('Additional fields: %(count)s') % {'count': remaining_count})
-
-    return f'{message}\n' + '\n'.join(lines)
-
-
-def _build_event_sentence(event_type: str, payload: dict) -> str:
-    viewer = _display_actor(None, payload.get('viewer_email'))
-    target = _target_description(payload)
-
-    if event_type == 'document_viewed':
-        return _('Your shared %(target)s was viewed by %(viewer)s.') % {
-            'target': target,
-            'viewer': viewer,
-        }
-
-    if event_type == 'dataroom_opened':
-        return _('Your shared %(target)s was opened by %(viewer)s.') % {
-            'target': target,
-            'viewer': viewer,
-        }
-
-    if event_type == 'document_downloaded':
-        return _('Your shared %(target)s was downloaded by %(viewer)s.') % {
-            'target': target,
-            'viewer': viewer,
-        }
-
-    if event_type == 'email_identified':
-        return _('%(viewer)s identified their email address for your shared %(target)s.') % {
-            'viewer': viewer,
-            'target': target,
-        }
-
-    thread_subject = payload.get('thread_subject') or _('Q&A thread')
-    sender_type = payload.get('sender_type') or 'user'
-    actor = viewer if sender_type == "viewer" else _("A team member")
-
-    if event_type == 'qna_thread_created':
-        return _('%(actor)s opened Q&A thread "%(thread_subject)s" on your shared %(target)s.') % {
-            'actor': actor,
-            'thread_subject': thread_subject,
-            'target': target,
-        }
-
-    if event_type == 'qna_message_created':
-        return _('%(actor)s replied to Q&A thread "%(thread_subject)s" on your shared %(target)s.') % {
-            'actor': actor,
-            'thread_subject': thread_subject,
-            'target': target,
-        }
-
-    if event_type == 'qna_thread_closed':
-        return _('Q&A thread "%(thread_subject)s" was closed on your shared %(target)s.') % {
-            'thread_subject': thread_subject,
-            'target': target,
-        }
-
-    if event_type == 'qna_thread_reopened':
-        return _('Q&A thread "%(thread_subject)s" was reopened on your shared %(target)s.') % {
-            'thread_subject': thread_subject,
-            'target': target,
-        }
-
-    return _('Coneshare automation event "%(event_type)s" was triggered for %(target)s.') % {
-        'event_type': event_type,
-        'target': target,
-    }
-
-
-def _build_event_text(delivery: AutomationDelivery) -> str:
-    payload = delivery.payload or {}
-    event_type = delivery.event_type
-    sentence = _build_event_sentence(event_type, payload)
-    return _append_event_details(sentence, payload)
-
-
-def _build_request_payload(delivery: AutomationDelivery) -> dict:
-    destination_type = delivery.destination.destination_type
-    endpoint_url = (delivery.destination.endpoint_url or '').lower()
-
-    event_type = delivery.event_type
-    text = _build_event_text(delivery)
-
-    if destination_type == 'slack':
-        # Slack incoming webhook requires "text" at minimum.
-        return {'text': text}
-
-    if destination_type == 'wechat' or 'qyapi.weixin.qq.com/cgi-bin/webhook/send' in endpoint_url:
-        # WeCom custom bot requires msgtype + text.content.
-        return {
-            'msgtype': 'text',
-            'text': {
-                'content': text,
-            },
-        }
-
-    if destination_type == 'feishu' or 'feishu.cn/flow/api/trigger-webhook/' in endpoint_url:
-        # FeiShu flow webhook payload example expects msg_type + content string.
-        return {
-            'msg_type': 'text',
-            'content': text,
-        }
-
-    parsed = urlparse(endpoint_url) if endpoint_url else None
-    discord_host = (parsed.netloc or '') if parsed else ''
-    discord_path = (parsed.path or '') if parsed else ''
-    is_discord_webhook = (
-        destination_type == 'discord'
-        or ('discord.com' in discord_host and '/api/webhooks/' in discord_path)
-        or ('discordapp.com' in discord_host and '/api/webhooks/' in discord_path)
-    )
-    if is_discord_webhook:
-        # Discord webhook message payload uses "content".
-        return {
-            'content': text,
-        }
-
-    webhook_payload = dict(delivery.payload or {})
-    webhook_payload['event_type'] = event_type
-    return webhook_payload
-
-
-def _mark_success(delivery: AutomationDelivery, response):
-    delivery.status = AutomationDelivery.Status.SUCCESS
-    delivery.response_code = response.status_code
-    delivery.response_body_excerpt = (response.text or '')[:RESPONSE_EXCERPT_LIMIT]
-    delivery.delivered_at = timezone.now()
-    delivery.next_retry_at = None
-    delivery.save(update_fields=['status', 'response_code', 'response_body_excerpt', 'delivered_at', 'next_retry_at', 'updated_at'])
-
-
-def _mark_failure_and_retry(delivery: AutomationDelivery, message: str, response_code=None):
-    delivery.attempt_count += 1
-    delivery.response_code = response_code
-    delivery.response_body_excerpt = (message or '')[:RESPONSE_EXCERPT_LIMIT]
-
-    if delivery.attempt_count >= MAX_DELIVERY_ATTEMPTS:
-        delivery.status = AutomationDelivery.Status.DEAD_LETTER
-        delivery.next_retry_at = None
-        delivery.save(update_fields=['attempt_count', 'response_code', 'response_body_excerpt', 'status', 'next_retry_at', 'updated_at'])
-        return
-
-    countdown = BASE_RETRY_SECONDS * (2 ** (delivery.attempt_count - 1))
-    delivery.status = AutomationDelivery.Status.FAILED
-    delivery.next_retry_at = timezone.now() + timedelta(seconds=countdown)
-    delivery.save(update_fields=['attempt_count', 'response_code', 'response_body_excerpt', 'status', 'next_retry_at', 'updated_at'])
-
-    deliver_automation_delivery_task.apply_async(args=[str(delivery.id)], countdown=countdown)
-
-
-def _mark_non_retryable_failure(delivery: AutomationDelivery, message: str, response_code=None):
-    delivery.attempt_count += 1
-    delivery.response_code = response_code
-    delivery.response_body_excerpt = (message or '')[:RESPONSE_EXCERPT_LIMIT]
-    delivery.status = AutomationDelivery.Status.DEAD_LETTER
-    delivery.next_retry_at = None
-    delivery.save(
-        update_fields=[
-            'attempt_count',
-            'response_code',
-            'response_body_excerpt',
-            'status',
-            'next_retry_at',
-            'updated_at',
-        ]
-    )
 
 @shared_task
 def dispatch_automation_event_task(event_type: str, payload: dict):
-    return dispatch_automation_event(event_type=event_type, payload=payload)
+    return dispatch_automation_event(event_type, payload)
 
 
-def _mark_success_direct(delivery: AutomationDelivery, message: str):
+def build_request(delivery: WebhookDelivery):
+    """(body_bytes, headers) for a delivery: JSON body signed with the endpoint's derived secret."""
+    body = json.dumps({
+        'id': delivery.idempotency_key,
+        'event': delivery.event_type,
+        'created_at': delivery.created_at.isoformat(),
+        'data': delivery.payload,
+    }, sort_keys=True, separators=(',', ':')).encode()
+    return body, {
+        'Content-Type': 'application/json',
+        'X-Coneshare-Event': delivery.event_type,
+        'X-Coneshare-Idempotency-Key': delivery.idempotency_key,
+        'X-Coneshare-Signature': sign_body(delivery.endpoint.signing_secret, body),
+    }
+
+
+def _finish(delivery, *, status, message='', response_code=None, retry_in=None):
     delivery.attempt_count += 1
-    delivery.status = AutomationDelivery.Status.SUCCESS
-    delivery.response_code = 200
+    delivery.status = status
+    delivery.response_code = response_code
     delivery.response_body_excerpt = (message or '')[:RESPONSE_EXCERPT_LIMIT]
-    delivery.delivered_at = timezone.now()
-    delivery.next_retry_at = None
-    delivery.save(update_fields=['attempt_count', 'status', 'response_code', 'response_body_excerpt', 'delivered_at', 'next_retry_at', 'updated_at'])
+    delivery.next_retry_at = timezone.now() + timedelta(seconds=retry_in) if retry_in else None
+    if status == WebhookDelivery.Status.SUCCESS:
+        delivery.delivered_at = timezone.now()
+    delivery.save()
+
+
+def _fail(delivery, message, response_code=None, retryable=True):
+    if not retryable or delivery.attempt_count + 1 >= MAX_DELIVERY_ATTEMPTS:
+        _finish(delivery, status=WebhookDelivery.Status.DEAD_LETTER, message=message, response_code=response_code)
+        return
+    countdown = BASE_RETRY_SECONDS * (2 ** delivery.attempt_count)
+    _finish(delivery, status=WebhookDelivery.Status.FAILED, message=message, response_code=response_code,
+            retry_in=countdown)
+    deliver_webhook_task.apply_async(args=[str(delivery.id)], countdown=countdown)
 
 
 @shared_task
-def deliver_automation_delivery_task(delivery_id: str):
-    try:
-        delivery = AutomationDelivery.objects.select_related('destination', 'rule').get(id=delivery_id)
-    except AutomationDelivery.DoesNotExist:
-        logger.warning('AutomationDelivery not found: %s', delivery_id)
+def deliver_webhook_task(delivery_id: str):
+    delivery = WebhookDelivery.objects.select_related('endpoint').filter(id=delivery_id).first()
+    if delivery is None or delivery.status in (WebhookDelivery.Status.SUCCESS, WebhookDelivery.Status.DEAD_LETTER):
         return
-
-    if delivery.status == AutomationDelivery.Status.SUCCESS:
-        logger.info(
-            'Automation delivery already succeeded; skipping duplicate execution: delivery_id=%s',
-            delivery_id,
-        )
-        return
-
-    if not delivery.rule.is_active or not delivery.destination.is_active:
-        logger.debug(
-            'Automation delivery skipped due to inactive state: delivery_id=%s rule_active=%s destination_active=%s',
-            delivery_id,
-            delivery.rule.is_active,
-            delivery.destination.is_active,
-        )
-        _mark_non_retryable_failure(delivery, 'Rule or destination is inactive.')
-        return
-
-    if delivery.destination.destination_type == 'email':
-        handle_email_delivery(delivery)
+    if not delivery.endpoint.is_active:
+        _fail(delivery, 'Endpoint is disabled.', retryable=False)
         return
 
     try:
-        validated_url = validate_outbound_url(delivery.destination.endpoint_url)
-    except (DestinationResolutionError, socket.gaierror) as exc:
-        logger.warning('Automation delivery DNS resolution failure: delivery_id=%s error=%s', delivery_id, exc)
-        _mark_failure_and_retry(delivery, 'DNS resolution failed for destination host.')
+        url = validate_outbound_url(delivery.endpoint.url)
+    except (DestinationResolutionError, socket.gaierror):
+        _fail(delivery, 'DNS resolution failed for destination host.')
         return
-    except Exception as exc:
-        logger.warning('Automation delivery URL validation failure: delivery_id=%s error=%s', delivery_id, exc)
-        _mark_non_retryable_failure(delivery, 'Invalid destination URL or blocked address.')
+    except Exception:
+        _fail(delivery, 'Invalid destination URL or blocked address.', retryable=False)
         return
 
-    owner = delivery.rule.created_by
-    owner_lang = getattr(owner, 'language', 'en') or 'en'
-    with translation_override(owner_lang):
-        request_payload = _build_request_payload(delivery)
-    logger.info(
-        'Automation delivery prepared: delivery_id=%s destination_type=%s method=%s url=%s payload_keys=%s has_text=%s',
-        delivery_id,
-        delivery.destination.destination_type,
-        delivery.destination.http_method,
-        validated_url,
-        sorted(list(request_payload.keys())) if isinstance(request_payload, dict) else type(request_payload).__name__,
-        bool(isinstance(request_payload, dict) and request_payload.get('text')),
-    )
-
+    body, headers = build_request(delivery)
     try:
-        response = requests.request(
-            method=delivery.destination.http_method,
-            url=validated_url,
-            json=request_payload,
-            headers=_build_headers(delivery, request_payload),
-            timeout=10,
-            allow_redirects=False,
-        )
-    except requests.RequestException as exc:
-        logger.warning('Automation delivery request exception: delivery_id=%s error=%s', delivery_id, exc)
-        _mark_failure_and_retry(delivery, f'Request failed: {exc}')
+        # pinned_request re-resolves and connects only to a validated address (DNS-rebinding safe).
+        response = pinned_request('POST', url, body=body, headers=headers, timeout=10)
+    except DestinationResolutionError:
+        _fail(delivery, 'DNS resolution failed for destination host.')
+        return
+    except serializers.ValidationError:
+        _fail(delivery, 'Destination resolved to a blocked address.', retryable=False)
+        return
+    except OutboundRequestError as exc:
+        _fail(delivery, f'Request failed: {exc}')
         return
 
     if 200 <= response.status_code < 300:
-        logger.info(
-            'Automation delivery success: delivery_id=%s status_code=%s response_excerpt=%s',
-            delivery_id,
-            response.status_code,
-            (response.text or '')[:200],
-        )
-        _mark_success(delivery, response)
+        _finish(delivery, status=WebhookDelivery.Status.SUCCESS, message=response.text,
+                response_code=response.status_code)
     else:
-        logger.error(
-            'Automation delivery failed: delivery_id=%s status_code=%s response_excerpt=%s payload=%s',
-            delivery_id,
-            response.status_code,
-            (response.text or '')[:200],
-            request_payload,
-        )
-        _mark_failure_and_retry(
-            delivery,
-            message=f'HTTP {response.status_code}: {response.text}',
-            response_code=response.status_code,
-        )
+        _fail(delivery, f'HTTP {response.status_code}: {response.text}', response.status_code)

@@ -33,7 +33,7 @@ import { DataroomFileTree } from './DataroomFileTree';
 import { ViewerToolbar } from './ViewerToolbar';
 import { PreviewViewer } from '../documents/PreviewViewer';
 
-import { printPdf, printImages } from '../../lib/print';
+import { printPdf } from '../../lib/print';
 import {
   hasRenderablePages,
   isPreviewPending,
@@ -45,6 +45,8 @@ import {
   getPublicQnaSummary,
   getShareLinkViewData,
   recordDataroomVisit,
+  fetchSharePageBlob,
+  fetchShareTiles,
 } from '../../services/api';
 import { DATAROOM_VIEWER_PAGE_SIZE } from '../../constants/pagination';
 import { useBranding } from '../../contexts/BrandingProvider';
@@ -865,15 +867,25 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedDocumentId, currentPage, totalPages]);
 
+  // Pages are fetched by script (never a URL) and painted into canvases.
+  const loadPage = useCallback(
+    (pageNumber, options) => fetchSharePageBlob(slug, pageNumber, { dataroomDocumentId: selectedDocumentId, ...options }),
+    [slug, selectedDocumentId]
+  );
+
+  // Only present when the link uses the restricted viewing pane (the pages then arrive blurred).
+  const loadTiles = useCallback(
+    (pageNumber, options) => fetchShareTiles(slug, pageNumber, { dataroomDocumentId: selectedDocumentId, ...options }),
+    [slug, selectedDocumentId]
+  );
+  const restrictedPane = Boolean(documentViewData?.link_settings?.restricted_viewing_pane || data?.link_settings?.restricted_viewing_pane);
+
   const handlePrint = () => {
     if (!documentViewData || !documentViewData.link_settings?.allow_download) return;
 
     if (documentViewData.type === 'pdf' && docDownloadUrl) {
       const inlineUrl = docDownloadUrl.includes('?') ? `${docDownloadUrl}&inline=true` : `${docDownloadUrl}?inline=true`;
       printPdf(inlineUrl);
-    } else {
-      const imageUrls = documentViewData.pages?.map((p) => p.url) || [];
-      printImages(imageUrls);
     }
   };
 
@@ -1207,6 +1219,8 @@ export function DataroomViewer({ data, slug, viewId, publicMeta }) {
                       <PreviewViewer
                         ref={viewerComponentRef}
                         documentData={documentViewData}
+                        loadPage={loadPage}
+                        loadTiles={restrictedPane ? loadTiles : undefined}
                         zoomLevel={zoomLevel}
                         onPageChange={setCurrentPage}
                         viewId={viewId}

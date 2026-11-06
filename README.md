@@ -1,214 +1,71 @@
+# coneshare-alt
 
-![Coneshare logo](https://raw.githubusercontent.com/coneshare/coneshare/refs/heads/main/coneshare_logo.png)
+A hardened, minimal fork of [Coneshare](https://github.com/coneshare/coneshare) for sharing sensitive documents with people outside your organization. It keeps Coneshare's document, data-room and share-link core and changes how viewers are authenticated, watched, limited and deleted. It differs substantially from upstream; this README and [`docs/fork`](docs/fork/README.md) describe everything that does.
 
-[![Build CI](https://github.com/coneshare/coneshare/actions/workflows/build-ci.yml/badge.svg)](https://github.com/coneshare/coneshare/actions/workflows/build-ci.yml)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/coneshare/coneshare)
-[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Documentation](https://img.shields.io/badge/docs-coneshare-blue)](https://docs.coneshare.com/en/)
+> The features here were written without being run in the author's environment. Run `./quickstart.sh check` and `./quickstart.sh test`, and work through [docs/fork/testing-checklist.md](docs/fork/testing-checklist.md), before relying on any of it.
 
-# Coneshare
+## What it does
 
-Coneshare is an open-source, self-hosted alternative to DocSend that works on top of your existing storage (Nextcloud, Google Drive, or Dropbox). Files stay on your own servers instead of moving to third-party cloud providers.
+* **Viewing:** documents are only shown in a canvas by the app's own script. Pages are POSTed, never a URL; blur and watermark are applied on the server.
+* **Share links:** allow-lists by address or domain, an e-mailed access code, NDA, password, watermark, view-only options. A link with no rules is open.
+* **Check-out (`/checkout`):** per-guest access by e-mailed 15-minute single-use link, NDA, per-file approval, timed in-app viewing, session reports.
+* **Monitoring and findings:** Print Screen, print, save and developer-tools signals, tamper and automation findings, configurable responses (ignore, log, notify, blur, end), a Wireshark-style filter over interactions.
+* **Security settings:** e-mailed code limits, failed-sign-in alerts, optional request throttling, log-only probe detection, a sign-in notice, a master monitoring switch.
+* **Data protection:** AES-256-GCM files at rest, TLS to the app, the file service and Redis (internal CA supported), `no-store` on everything dynamic, data retention with hard delete.
+* **Not built:** end-to-end encryption (designed only, see [docs/fork/e2e-encryption.md](docs/fork/e2e-encryption.md)).
 
-Use Coneshare to share documents and videos securely: apply dynamic watermarks, track viewer engagement page by page in real time, and trigger automations from viewer activity.
+Every control, its default and where it is changed is in [docs/fork/README.md](docs/fork/README.md).
 
-[Quick start](https://github.com/coneshare/coneshare-compose) · [Docs](https://docs.coneshare.com/en/) · [Live demo](https://www.coneshare.com/demo) · [Roadmap](https://github.com/orgs/coneshare/projects/2/) · [Forum](https://github.com/orgs/coneshare/discussions)
+## Start
 
-If you find this project useful, please consider starring the repository.
-
-![Coneshare 30s product walkthrough](https://github.com/coneshare/coneshare/releases/download/v1.2.0/overview-30s.gif)
-
----
-
-## How it works
-
-Coneshare runs directly on top of your storage:
-
-- Files remain in your storage provider (Nextcloud, Google Drive, or Dropbox).
-- Coneshare adds:
-  - Virtual datarooms and media previews
-  - Access controls and link permissions
-  - Document engagement tracking
-  - Webhooks and workflow automation
-
-Keep your existing storage workflows while gaining access controls, datarooms, and engagement analytics.
-
----
-
-## Features
-
-### Virtual datarooms and media previews
-- Organize documents and rich media into structured rooms.
-- PDF rendering and secure video streaming.
-- Inline viewers to navigate between related items.
-
-### Access control
-- Password protection, link expiration dates, and email verification.
-- Download restrictions and dynamic watermarks.
-
-### Analytics and engagement tracking
-- Track views, revisits, and downloads in real time.
-- View page-by-page reading duration and video playback metrics.
-
-### Automation and webhooks
-- Slack and webhook notifications for link events.
-- Trigger actions based on viewer activity.
-
-### Infrastructure and privacy
-- Self-hosted on your own servers or private cloud.
-- Connects directly to existing storage without copying or duplicating files.
-
-### Internationalization
-- Available in English, Simplified Chinese, Russian, German, French, and Dutch (`en`, `zh-hans`, `ru`, `de`, `fr`, `nl`).
-
----
-
-## Integrations
-
-Coneshare connects with:
-
-- Nextcloud (self-hosted)
-- Google Drive
-- Dropbox
-
-More storage connectors are in development.
-
----
-
-## Common use cases
-
-### Sales and fundraising
-Share pitch decks and deal rooms with prospects, tracking which pages receive the most attention.
-
-### Secure external sharing
-Send sensitive documents outside your company with access expiration, download controls, and viewer watermarking.
-
-### Regulated environments
-Deploy dataroom workflows and external sharing while maintaining full control over file storage and compliance boundaries.
-
----
-
-## Who is Coneshare for?
-
-Coneshare is designed for teams that:
-
-- Store files in cloud or self-hosted storage (Nextcloud, Google Drive, Dropbox)
-- Share sensitive files with external parties
-- Need detailed document analytics and read receipts
-- Require self-hosted or private infrastructure
-
----
-
-## Deployment (self-hosted)
-
-For production deployments, use the [coneshare-compose repository](https://github.com/coneshare/coneshare-compose). It provides Docker Compose configurations with automated Let's Encrypt SSL, reverse proxy setups, and preconfigured containers.
-
----
-
-## Local development
-
-To run the codebase locally for development and contributions:
-
-### Source build
+Needs Docker with the Compose plugin and `openssl`.
 
 ```bash
-git clone git@github.com:coneshare/coneshare.git
-cd coneshare
-cp .env.template .env
-make build
-make up
-make migrate
+./quickstart.sh
 ```
 
-### First-run verification checklist
+It builds the stack, creates `.env` with fresh secrets, makes an internal CA and certificates in `./certs`, generates the storage key, runs migrations and creates an admin account (the address and a random password are printed at the end). Open `https://localhost:8443` and import `certs/ca.crt` into your browser to trust it.
 
-After `make up` and `make migrate`, verify the local services before configuring storage integrations:
+There is no mail server in the stack: e-mails (access codes, sign-in links, approval requests) are printed in the backend log (`./quickstart.sh logs`) until you configure your own under *Admin > Notifications > E-mail setup* or `EMAIL_*` in `.env`.
 
-- Frontend is reachable at [http://localhost:5173](http://localhost:5173)
-- API responds at [http://localhost:8000/api/v1/](http://localhost:8000/api/v1/)
-- Core services are up (`backend`, `frontend`, `core`, `redis`, `celery`)
-- Local files persist under the project data and storage volumes defined in `docker-compose.yml`
-- Smoke test:
-  - Upload one document
-  - Create a share link
-  - Open the link in a private browser window to confirm view access works
+| Command | |
+|---|---|
+| `./quickstart.sh test` | backend, frontend and Go tests, in the containers |
+| `./quickstart.sh check` | migrations match the models |
+| `./quickstart.sh encrypt-existing` | encrypt files stored before encryption was on |
+| `./quickstart.sh logs` / `stop` / `reset` | follow logs / stop / delete local data |
+| `./quickclose.sh` | remove containers, images, data and this folder |
 
-### Troubleshooting first install
+`.env` holds the storage encryption key: **losing it makes stored files unreadable**, so back it up. Opt-outs (`TLS=off`, `STORAGE_ENCRYPTION=off`) are explicit and warned about; see [docs/fork/container-security.md](docs/fork/container-security.md). Running on an internal network, with your own subdomain or nginx: [docs/fork/internal-deployment.md](docs/fork/internal-deployment.md).
 
-- `.env` and `SITE_DOMAIN` mismatch:
-  - Confirm `.env` exists (copied from `.env.template`) and `SITE_DOMAIN` matches how you access the app locally.
-- Backend cannot reach `core` service:
-  - Check service names and ports in `docker-compose.yml`, then inspect backend and core logs for connection errors.
-- Redis or Celery issues (background jobs not running):
-  - Confirm both `redis` and `celery` containers are running, then check Celery worker logs.
-- Storage permissions:
-  - Verify mounted storage directories exist and are writable by container processes.
-- Where to look first:
-  - Run `make logs` from the repository root, checking `backend`, `core`, and `celery` error output.
+## How movement and behaviour detection works (transparency)
 
----
+This fork can show an administrator where a guest's pointer went while a file was checked out. What is collected, how it becomes a report, and what it cannot tell you:
 
-## Architecture
+* **Collected, in the guest's browser:** the pointer's position on the page (as a fraction of the page, 0 to 1000 each way, never pixels) at most every 100 ms; which page is in the middle of the screen once a second; left-button presses. Only while the tab is visible and focused. No keystrokes, no page content, no screenshots.
+* **Kept:** encrypted in the database, in bounded batches, only while the check-out is open (plus two minutes), deleted with the file by data retention.
+* **Turned into:** time spent per page, a heat grid (20 x 28), a typical path, horizontal / vertical / diagonal strokes (diagonal = 25 to 65 degrees from horizontal), straight runs (at least 5 samples and 8% of the page, within 3% of a line), and, for each print, save, screenshot or devtools key, what the pointer did in the 5 seconds either side.
+* **Why:** the aim is "where is reading happening" for sensitive files; fractions and no content answer that without collecting more than needed. Gaps over 0.6 s are not counted as dwell, so idle time is not counted as reading.
+* **Not proof:** a pointer is not an eye; slow page loading currently looks like movement; browsers cannot see the Fn key or shortcuts the operating system swallows; a determined person can block or fake the reports. Treat it as a hint and read the confidence line on each report.
+* **On by default, switchable:** *Admin > Security*. Guests are told by the sign-in notice that actions may be recorded.
 
-![Coneshare architecture diagram](./docs/assets/readme/architecture-v1.3.png)
+Full detail, every threshold and the reasoning: [docs/fork/movement-detection.md](docs/fork/movement-detection.md).
 
-Coneshare consists of four primary services:
+## Documentation
 
-* `backend/`: Django and DRF API, Celery, and Redis for background tasks
-* `core/`: Go service for file delivery and media streaming
-* `frontend/`: React and Vite web application
+| | |
+|---|---|
+| [docs/fork/README.md](docs/fork/README.md) | every control, default, and where to change it |
+| [docs/fork/movement-detection.md](docs/fork/movement-detection.md) | how behaviour is collected and reports computed, and the limits |
+| [docs/fork/signals.md](docs/fork/signals.md) | signals and findings, what each can and cannot see |
+| [docs/fork/container-security.md](docs/fork/container-security.md) | encryption, TLS, internal CA, opt-outs |
+| [docs/fork/caching-and-urls.md](docs/fork/caching-and-urls.md) | caching, headers, what is in addresses and logs |
+| [docs/fork/data-retention.md](docs/fork/data-retention.md) | per-file and global deletion, hard delete |
+| [docs/fork/internal-deployment.md](docs/fork/internal-deployment.md) | internal subdomain, nginx |
+| [docs/fork/removed-from-upstream.md](docs/fork/removed-from-upstream.md) | what was removed |
+| [docs/fork/testing-checklist.md](docs/fork/testing-checklist.md) | how to check each feature |
+| [docs/fork/e2e-encryption.md](docs/fork/e2e-encryption.md), [docs/fork/checkout-ldap-sso.md](docs/fork/checkout-ldap-sso.md) | designs, not built |
 
-Technical reference:
+## Licence and origin
 
-* [Technology Stack](docs/strategy/coneshare-techstack.md)
-* [Open API Reference](docs/strategy/coneshare-open-api.md)
-
----
-
-## Contributing
-
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for our code of conduct and pull request process.
-
-## Contributors
-
-<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<!-- prettier-ignore-start -->
-<!-- markdownlint-disable -->
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/xiez"><img src="https://avatars.githubusercontent.com/u/1459699?v=4?s=100" width="100px;" alt="Justin Zheng"/><br /><sub><b>Justin Zheng</b></sub></a><br /><a href="https://github.com/coneshare/coneshare/commits?author=xiez" title="Code">💻</a> <a href="https://github.com/coneshare/coneshare/commits?author=xiez" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/coneshare/coneshare/commits?author=xiez" title="Documentation">📖</a> <a href="https://github.com/coneshare/coneshare/commits?author=xiez" title="Design">🎨</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jamesramsay"><img src="https://avatars.githubusercontent.com/u/1191554?v=4?s=100" width="100px;" alt="James Ramsay"/><br /><sub><b>James Ramsay</b></sub></a><br /><a href="https://github.com/coneshare/coneshare/commits?author=jamesramsay" title="Code">💻</a> <a href="https://github.com/coneshare/coneshare/commits?author=jamesramsay" title="Tests">⚠️</a> <a href="https://github.com/coneshare/coneshare/issues?q=author%3Ajamesramsay" title="Bug reports">🐛</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/mfriedewald"><img src="https://avatars.githubusercontent.com/u/12811724?v=4?s=100" width="100px;" alt="Matthias Friedewald"/><br /><sub><b>Matthias Friedewald</b></sub></a><br /><a href="https://github.com/coneshare/coneshare/commits?author=mfriedewald" title="Code">💻</a> <a href="https://github.com/coneshare/coneshare/commits?author=mfriedewald" title="Tests">⚠️</a> <a href="https://github.com/coneshare/coneshare/issues?q=author%3Amfriedewald" title="Bug reports">🐛</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/KeizerDev"><img src="https://avatars.githubusercontent.com/u/4026917?v=4?s=100" width="100px;" alt="KeizerDev"/><br /><sub><b>KeizerDev</b></sub></a><br /><a href="https://github.com/coneshare/coneshare/commits?author=KeizerDev" title="Code">💻</a> <a href="https://github.com/coneshare/coneshare/commits?author=KeizerDev" title="Translation">🌍</a> <a href="https://github.com/coneshare/coneshare/commits?author=KeizerDev" title="Tests">⚠️</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/tomelliot"><img src="https://avatars.githubusercontent.com/u/3267684?v=4?s=100" width="100px;" alt="Tom Elliot"/><br /><sub><b>Tom Elliot</b></sub></a><br /><a href="https://github.com/coneshare/coneshare/commits?author=tomelliot" title="Code">💻</a> <a href="https://github.com/coneshare/coneshare/commits?author=tomelliot" title="Tests">⚠️</a> <a href="https://github.com/coneshare/coneshare/issues?q=author%3Atomelliot" title="Bug reports">🐛</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/pagatino-afk"><img src="https://avatars.githubusercontent.com/u/256631749?v=4?s=100" width="100px;" alt="Agatino Platania"/><br /><sub><b>Agatino Platania</b></sub></a><br /><a href="https://github.com/coneshare/coneshare/commits?author=pagatino-afk" title="Code">💻</a> <a href="https://github.com/coneshare/coneshare/commits?author=pagatino-afk" title="Tests">⚠️</a> <a href="https://github.com/coneshare/coneshare/issues?q=author%3Apagatino-afk" title="Bug reports">🐛</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Industry"><img src="https://avatars.githubusercontent.com/u/413149?v=4?s=100" width="100px;" alt="Industry"/><br /><sub><b>Industry</b></sub></a><br /><a href="https://github.com/coneshare/coneshare/commits?author=Industry" title="Code">💻</a> <a href="https://github.com/coneshare/coneshare/commits?author=Industry" title="Tests">⚠️</a> <a href="https://github.com/coneshare/coneshare/issues?q=author%3AIndustry" title="Bug reports">🐛</a></td>
-    </tr>
-  </tbody>
-</table>
-
-<!-- markdownlint-restore -->
-<!-- prettier-ignore-end -->
-
-<!-- ALL-CONTRIBUTORS-LIST:END -->
-
----
-
-## Community
-
-* Docs: [https://docs.coneshare.com/en/](https://docs.coneshare.com/en/)
-* Discussions: [https://github.com/orgs/coneshare/discussions](https://github.com/orgs/coneshare/discussions)
-* Email: [dev@coneshare.com](mailto:dev@coneshare.com)
-
----
-
-## License
-
-MIT License. See [LICENSE](LICENSE).
-
----
-
-## Security
-
-For security issues, contact [dev@coneshare.com](mailto:dev@coneshare.com).
+MIT, see [LICENSE](LICENSE). Based on Coneshare (Copyright (c) 2025-2026 Coneshare). The probe-detection rule data in `backend/security/crs` comes from the OWASP Core Rule Set (Apache-2.0), see [its notice](backend/security/crs/NOTICE.md).

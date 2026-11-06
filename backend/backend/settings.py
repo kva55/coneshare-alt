@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 from urllib.parse import urlparse
 
 from celery.schedules import crontab
@@ -32,11 +33,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ==============================================================================
 # These settings are required for the application to start.
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ['SECRET_KEY']
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 't')
+
+# Values that were published as defaults (upstream .env.template and examples).
+# They are rejected even in DEBUG so a copied template can never run as-is.
+KNOWN_PUBLIC_SECRETS = {
+    'django-insecure-development-key-for-coneshare',
+    'supersecrettoken',
+    'changeme',
+    'change-me',
+    'secret',
+}
+MIN_SECRET_LENGTH = 32
+
+
+def _require_secret(name: str) -> str:
+    """Read a secret from the environment; refuse missing, public or (outside DEBUG) weak values."""
+    value = os.environ.get(name, '').strip()
+    if not value:
+        raise RuntimeError(f"{name} must be set (generate one with: openssl rand -hex 32).")
+    if value in KNOWN_PUBLIC_SECRETS or value.startswith('django-insecure-'):
+        raise RuntimeError(f"{name} uses a publicly known default value; generate a new one.")
+    if not DEBUG and len(value) < MIN_SECRET_LENGTH:
+        raise RuntimeError(f"{name} must be at least {MIN_SECRET_LENGTH} characters when DEBUG is off.")
+    return value
+
+
+SECRET_KEY = _require_secret('SECRET_KEY')
 
 # Site domain is the primary source for host configuration.
 SITE_DOMAIN = os.environ.get('SITE_DOMAIN', 'http://localhost:5173')
@@ -57,6 +81,9 @@ if SITE_HOSTNAME and SITE_HOSTNAME not in default_hosts:
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', ','.join(default_hosts)).split(',')
 CSRF_TRUSTED_ORIGINS = os.environ.get('CSRF_TRUSTED_ORIGINS', SITE_DOMAIN).split(',')
+if DEBUG and 'CSRF_TRUSTED_ORIGINS' not in os.environ and SITE_HOSTNAME == 'localhost':
+    # Local development: allow reaching the dev server by IP as well as by name.
+    CSRF_TRUSTED_ORIGINS.append(SITE_DOMAIN.replace('//localhost', '//127.0.0.1', 1))
 
 # Trusted reverse proxies for client IP determination.
 # Forwarding headers (X-Forwarded-For, X-Real-IP) will only be honoured if the
@@ -75,7 +102,26 @@ TRUSTED_PROXIES = [
 
 # File Server (Core Service) Configuration
 CORE_API_URL = os.environ.get('CORE_API_URL', 'http://core:8080')
-INTERNAL_API_TOKEN = os.environ.get('INTERNAL_API_TOKEN')
+INTERNAL_API_TOKEN = _require_secret('INTERNAL_API_TOKEN')
+
+# Outbound requests (webhooks) may never reach loopback/link-local/metadata addresses.
+# Private ranges (RFC 1918, CGNAT, IPv6 ULA) are blocked unless listed here, e.g.
+# OUTBOUND_ALLOWED_NETWORKS=10.20.0.0/16,192.168.50.10/32
+def _parse_outbound_networks(raw):
+    import ipaddress
+    nets = []
+    for entry in (raw or '').split(','):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid OUTBOUND_ALLOWED_NETWORKS entry {entry!r}: {exc}") from exc
+    return nets
+
+
+OUTBOUND_ALLOWED_NETWORKS = _parse_outbound_networks(os.environ.get('OUTBOUND_ALLOWED_NETWORKS', ''))
 
 # Email Configuration (for sending password resets, etc.)
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
@@ -117,6 +163,23 @@ LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 # Redis base URL from environment (should not include database number)
 REDIS_BASE_URL = os.environ.get('REDIS_URL', 'redis://redis:6379').rstrip('/')
 
+# Internal CA: when set, services inside the stack are reached over TLS and verified against it.
+# The CA is added to the public bundle (not swapped for it), so calls to outside services keep working.
+INTERNAL_CA_FILE = os.environ.get('INTERNAL_CA_FILE', '')
+if INTERNAL_CA_FILE:
+    import certifi
+    _bundle = os.path.join(tempfile.gettempdir(), 'coneshare-ca-bundle.pem')
+    with open(certifi.where(), 'rb') as _public, open(INTERNAL_CA_FILE, 'rb') as _internal:
+        _pem = _public.read() + b'\n' + _internal.read()
+    if not os.path.exists(_bundle) or open(_bundle, 'rb').read() != _pem:
+        _tmp = f'{_bundle}.{os.getpid()}'
+        with open(_tmp, 'wb') as _out:
+            _out.write(_pem)
+        os.replace(_tmp, _bundle)
+    os.environ['REQUESTS_CA_BUNDLE'] = _bundle
+    os.environ['SSL_CERT_FILE'] = _bundle
+REDIS_USES_TLS = REDIS_BASE_URL.startswith('rediss://')
+
 # Cache Configuration (using Redis)
 CACHES = {
     "default": {
@@ -124,6 +187,7 @@ CACHES = {
         "LOCATION": f"{REDIS_BASE_URL}/1",  # Use DB 1 for cache
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            **({"CONNECTION_POOL_KWARGS": {"ssl_cert_reqs": "required", "ssl_ca_certs": INTERNAL_CA_FILE or None}} if REDIS_USES_TLS else {}),
         }
     }
 }
@@ -131,6 +195,11 @@ CACHES = {
 # Celery Configuration
 CELERY_BROKER_URL = f"{REDIS_BASE_URL}/0"  # Use DB 0 for Celery
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+if REDIS_USES_TLS:
+    import ssl as _ssl
+    _redis_tls = {'ssl_cert_reqs': _ssl.CERT_REQUIRED, 'ssl_ca_certs': INTERNAL_CA_FILE or None}
+    CELERY_BROKER_USE_SSL = _redis_tls
+    CELERY_REDIS_BACKEND_USE_SSL = _redis_tls
 CELERY_RESULT_BACKEND = f"{REDIS_BASE_URL}/0"  # Use DB 0 for Celery
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -141,6 +210,14 @@ CELERY_BEAT_SCHEDULE = {
     'purge-expired-trash-documents-daily': {
         'task': 'documents.tasks.purge_expired_trash_documents_task',
         'schedule': crontab(hour=0, minute=0),  # Daily at midnight UTC
+    },
+    'data-retention-hourly': {
+        'task': 'retention.tasks.run_retention',
+        'schedule': crontab(minute=7),  # hourly; files past their date, or the global policy, are hard-deleted
+    },
+    'security-probe-digest': {
+        'task': 'security.tasks.flush_probe_digest',
+        'schedule': 60.0,  # held-back probe alerts go out once the cool-down is over
     },
 }
 
@@ -172,10 +249,14 @@ INSTALLED_APPS = [
     'sharelinks',
     'analytics',
     'automations',
+    'checkout',
+    'security',
+    'retention',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'core.nocache.NoStoreMiddleware',  # every dynamic response is no-store (see core/nocache.py)
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.locale.LocaleMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -183,6 +264,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'security.middleware.ProbeDetectionMiddleware',  # experimental, log-only; off until enabled in the UI
 ]
 
 ROOT_URLCONF = 'backend.urls'
@@ -206,20 +288,24 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # JWT from the httpOnly access cookie (CSRF-checked) or an Authorization header.
+        'core.auth_cookies.CookieJWTAuthentication',
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'EXCEPTION_HANDLER': 'security.throttling.exception_handler',
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
+        'security.throttling.GeneralAnonThrottle',
+        'security.throttling.GeneralUserThrottle',
         'rest_framework.throttling.ScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '1000/day',
-        'user': '200/min',
+        # 'anon' and 'user' (and the viewing limit) come from Admin > Security and are OFF unless switched on there
+        # (security/throttling.py); the scoped limits below always apply.
+        'anon': '300/min',
+        'user': '600/min',
         'password_verify': '5/min',
         'health_check': '1000/min',
         'document_copy': '5/min',
@@ -239,6 +325,65 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+# --- Cookie / transport security -------------------------------------------------
+# JWTs are stored in httpOnly cookies (see core/auth_cookies.py), never in JS storage.
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    return default if raw is None else raw.strip().lower() in ('true', '1', 't', 'yes')
+
+
+SITE_IS_HTTPS = SITE_DOMAIN.startswith('https://')
+AUTH_ACCESS_COOKIE = 'cs_access'
+AUTH_REFRESH_COOKIE = 'cs_refresh'
+AUTH_COOKIE_SECURE = _env_bool('AUTH_COOKIE_SECURE', not DEBUG)
+AUTH_COOKIE_SAMESITE = 'Strict'
+AUTH_COOKIE_DOMAIN = os.environ.get('AUTH_COOKIE_DOMAIN') or None
+
+# A share link that lists individual addresses and/or domains is restricted: the viewer proves an
+# allowed address with a one-time code e-mailed to them (see sharelinks/access.py). A link with
+# no rules is open and asks for no e-mail. Set this to True for strict mode, where every link
+# must be restricted. Signed-in owners/collaborators are always exempt.
+SHARELINK_REQUIRE_ALLOWLIST = _env_bool('SHARELINK_REQUIRE_ALLOWLIST', False)
+ACCESS_CODE_TTL_MINUTES = int(os.environ.get('ACCESS_CODE_TTL_MINUTES', 10))
+ACCESS_CODE_MAX_ATTEMPTS = int(os.environ.get('ACCESS_CODE_MAX_ATTEMPTS', 5))
+ACCESS_REQUESTS_PER_EMAIL = int(os.environ.get('ACCESS_REQUESTS_PER_EMAIL', 5))   # per link, per 15 minutes
+ACCESS_REQUESTS_PER_IP = int(os.environ.get('ACCESS_REQUESTS_PER_IP', 30))        # per link, per 15 minutes
+
+# /checkout: authenticated file check-out (see checkout/). Hard caps; each policy can only be
+# set at or below them.
+CHECKOUT_MAX_MINUTES = int(os.environ.get('CHECKOUT_MAX_MINUTES', 5))              # longest check-out window
+CHECKOUT_MAX_ATTEMPTS_CAP = int(os.environ.get('CHECKOUT_MAX_ATTEMPTS_CAP', 10))   # most check-outs per window
+CHECKOUT_ATTEMPT_WINDOW_HOURS = int(os.environ.get('CHECKOUT_ATTEMPT_WINDOW_HOURS', 24))
+CHECKOUT_SESSION_MINUTES = int(os.environ.get('CHECKOUT_SESSION_MINUTES', 30))     # sign-in lifetime
+CHECKOUT_LOGIN_LINK_MINUTES = int(os.environ.get('CHECKOUT_LOGIN_LINK_MINUTES', 15))  # e-mailed sign-in link, single use
+CHECKOUT_REQUEST_VALID_HOURS = int(os.environ.get('CHECKOUT_REQUEST_VALID_HOURS', 24))  # an approved request must be opened within this
+
+# Server-side viewing protections (sharelinks/protected_pages.py). Blur and spotlight are applied
+# on the server: a link with the restricted viewing pane never sends the clear page.
+SPOTLIGHT_BLUR_RATIO = float(os.environ.get('SPOTLIGHT_BLUR_RATIO', 0.02))            # blur radius, share of page width
+# Short-lived in-memory caches for tile cutting (see sharelinks/protected_pages.py). 0 switches one off.
+PAGE_CACHE_SECONDS = int(os.environ.get('PAGE_CACHE_SECONDS', 120))
+PAGE_SOURCE_CACHE_BYTES = int(os.environ.get('PAGE_SOURCE_CACHE_BYTES', 32 * 1024 * 1024))
+PAGE_IMAGE_CACHE_ITEMS = int(os.environ.get('PAGE_IMAGE_CACHE_ITEMS', 3))
+SPOTLIGHT_TILES_PER_MINUTE = int(os.environ.get('SPOTLIGHT_TILES_PER_MINUTE', 3000))     # tiles served per session and link
+FOCUS_LEASE_SECONDS = int(os.environ.get('FOCUS_LEASE_SECONDS', 15))                  # pages are served only to a recently-focused viewer
+
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', not DEBUG)
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SECURE = _env_bool('CSRF_COOKIE_SECURE', not DEBUG)
+CSRF_COOKIE_SAMESITE = 'Strict'
+CSRF_COOKIE_HTTPONLY = False  # the SPA reads it to send X-CSRFToken
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'no-referrer'   # no address (and nothing in it) is sent to any other page
+# Static files and media (logos) hold no documents or personal data and may be cached by their server.
+NO_STORE_EXEMPT_PREFIXES = ('/static/', '/media/')
+X_FRAME_OPTIONS = 'DENY'
+# HSTS only when served over HTTPS outside DEBUG; override with SECURE_HSTS_SECONDS.
+SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', 31536000 if (SITE_IS_HTTPS and not DEBUG) else 0))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', False)
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -369,7 +514,7 @@ LOGGING = {
         },
     },
     'loggers': {
-        # root logger — catches everything from Django, Celery, and custom apps
+        # root logger - catches everything from Django, Celery, and custom apps
         '': {
             'handlers': ['console'],
             'level': LOG_LEVEL,

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getShareLinkDetails, getShareLinkViewSessions } from '../services/api';
 import { ViewSessionsTable } from '../components/documents/ViewSessionsTable';
+import { ViewerActivityPanel } from '../components/documents/ViewerActivityPanel';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Button } from '../components/ui/Button';
 import { ArrowLeft } from 'lucide-react';
@@ -80,6 +81,9 @@ export function ShareLinkAnalyticsPage() {
         <p className="text-muted-foreground">
           Showing all {viewsData?.count || 0} recorded view sessions for this share link.
         </p>
+      </div>
+      <div className="mt-8">
+        <ViewerActivityPanel linkId={linkId} />
       </div>
       <div className="mt-8">
         <ViewSessionsTable

@@ -1,0 +1,7 @@
+Your link to see the files you can access
+
+Open this link to sign in:
+
+    {{ link }}
+
+The link works once, for {{ minutes }} minutes, and only for the file request page. If you did not ask for it, ignore this message; nothing happens until the link is opened.

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useCallback, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
-import { LazyImage } from './LazyImage';
+import { PageCanvas } from './PageCanvas';
 import { recordPageView } from '../../services/api';
 import { useLinkClickTracking } from '../../hooks/useLinkClickTracking';
 import { isSafeUrl } from '../../lib/utils';
 
-export const PreviewViewer = forwardRef(({ documentData, zoomLevel, onPageChange, viewId, dataroomVisitId }, ref) => {
+export const PreviewViewer = forwardRef(({ documentData, loadPage, loadTiles, zoomLevel, onPageChange, viewId, dataroomVisitId }, ref) => {
   const pages = useMemo(
     () => (Array.isArray(documentData?.pages) ? documentData.pages : []),
     [documentData?.pages]
@@ -191,7 +191,7 @@ export const PreviewViewer = forwardRef(({ documentData, zoomLevel, onPageChange
       className="h-full overflow-y-auto bg-gray-100 dark:bg-gray-800"
     >
       <div
-        className="mx-auto flex w-fit origin-top flex-col items-center space-y-4 p-4 pb-24 transition-transform duration-200"
+        className="mx-auto flex w-full origin-top flex-col items-center space-y-4 p-4 pb-24 transition-transform duration-200"
         style={{ transform: `scale(${zoomLevel})` }}
       >
         {pages.map((page) => (
@@ -205,56 +205,61 @@ export const PreviewViewer = forwardRef(({ documentData, zoomLevel, onPageChange
               }
             }}
             data-page-number={page.page_number}
-            className="relative mx-auto w-fit"
+            className="relative mx-auto w-full"
           >
-            <LazyImage
-              src={page.url}
+            <PageCanvas
+              loadPage={loadPage}
+              loadTiles={loadTiles}
+              pageNumber={page.page_number}
+              width={page.metadata?.width}
+              height={page.metadata?.height}
               alt={`Page ${page.page_number}`}
-              className="mx-auto max-w-full rounded-md shadow-md"
+              className="rounded-md shadow-md"
               scrollContainer={scrollContainer}
-            />
-            {page.text_content?.lines && page.text_content.lines.length > 0 && (
-              <div
-                className="absolute inset-0 pointer-events-auto overflow-hidden select-text text-layer"
-                data-testid={`text-layer-${page.page_number}`}
-              >
-                {page.text_content.lines.map((line, idx) => (
-                  <span
-                    key={idx}
-                    className="absolute leading-none whitespace-pre text-transparent cursor-text select-text"
-                    style={{
-                      left: `${line.bbox.left}%`,
-                      top: `${line.bbox.top}%`,
-                      width: `${line.bbox.width}%`,
-                      height: `${line.bbox.height}%`,
-                      fontSize: line.bbox?.height
-                        ? `${line.bbox.height}cqh`
-                        : (line.font_size_pt ? `${line.font_size_pt}pt` : undefined),
-                    }}
-                  >
-                    {line.text}
-                  </span>
-                ))}
-              </div>
-            )}
-            {page.page_links?.links?.filter(link => isSafeUrl(link.url) && link.bbox).map((link, idx) => (
-              <a
-                key={idx}
-                href={link.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="absolute cursor-pointer hover:bg-blue-500/10 transition-colors duration-150 rounded"
-                style={{
-                  left: `${link.bbox.left}%`,
-                  top: `${link.bbox.top}%`,
-                  width: `${link.bbox.width}%`,
-                  height: `${link.bbox.height}%`,
-                  zIndex: 5,
-                }}
-                title={link.url}
-                onClick={() => handleLinkClick(link.url, page.page_number)}
-              />
-            ))}
+            >
+              {page.text_content?.lines && page.text_content.lines.length > 0 && (
+                <div
+                  className="absolute inset-0 pointer-events-auto overflow-hidden select-text text-layer"
+                  data-testid={`text-layer-${page.page_number}`}
+                >
+                  {page.text_content.lines.map((line, idx) => (
+                    <span
+                      key={idx}
+                      className="absolute leading-none whitespace-pre text-transparent cursor-text select-text"
+                      style={{
+                        left: `${line.bbox.left}%`,
+                        top: `${line.bbox.top}%`,
+                        width: `${line.bbox.width}%`,
+                        height: `${line.bbox.height}%`,
+                        fontSize: line.bbox?.height
+                          ? `${line.bbox.height}cqh`
+                          : (line.font_size_pt ? `${line.font_size_pt}pt` : undefined),
+                      }}
+                    >
+                      {line.text}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {page.page_links?.links?.filter(link => isSafeUrl(link.url) && link.bbox).map((link, idx) => (
+                <a
+                  key={idx}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="absolute cursor-pointer hover:bg-blue-500/10 transition-colors duration-150 rounded"
+                  style={{
+                    left: `${link.bbox.left}%`,
+                    top: `${link.bbox.top}%`,
+                    width: `${link.bbox.width}%`,
+                    height: `${link.bbox.height}%`,
+                    zIndex: 5,
+                  }}
+                  title={link.url}
+                  onClick={() => handleLinkClick(link.url, page.page_number)}
+                />
+              ))}
+            </PageCanvas>
           </div>
         ))}
       </div>

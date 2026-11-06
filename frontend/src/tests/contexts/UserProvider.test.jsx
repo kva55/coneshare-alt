@@ -3,14 +3,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UserProvider, useUser } from '../../contexts/UserProvider';
 import * as api from '../../services/api';
-import { jwtDecode } from 'jwt-decode';
-
-vi.mock('jwt-decode', () => ({
-  jwtDecode: vi.fn(),
-}));
+import { authService } from '../../services/authService';
 
 vi.mock('../../services/api', () => ({
-  getUser: vi.fn(),
+  getSession: vi.fn(),
 }));
 
 vi.mock('../../services/authService', () => ({
@@ -25,11 +21,12 @@ vi.mock('react-router-dom', () => ({
 }));
 
 function TestConsumer() {
-  const { user } = useUser();
+  const { user, refreshUser } = useUser();
   return (
     <div>
       <span data-testid="user-name">{user ? user.name : 'No User'}</span>
       <span data-testid="user-id">{user ? user.id : 'No ID'}</span>
+      <button onClick={() => refreshUser()}>refresh</button>
     </div>
   );
 }
@@ -40,10 +37,9 @@ describe('UserProvider', () => {
     localStorage.clear();
   });
 
-  it('fetches user when only access_token is present in localStorage', async () => {
-    localStorage.setItem('access_token', 'mock_access_token');
-    jwtDecode.mockReturnValue({ user_id: 101 });
-    api.getUser.mockResolvedValue({ data: { id: 101, name: 'Alice' } });
+  it('loads the user from the session endpoint without reading any stored token', async () => {
+    api.getSession.mockResolvedValue({ data: { id: 101, name: 'Alice' } });
+    const getItem = vi.spyOn(Storage.prototype, 'getItem');
 
     render(
       <UserProvider>
@@ -52,15 +48,17 @@ describe('UserProvider', () => {
     );
 
     await waitFor(() => {
-      expect(api.getUser).toHaveBeenCalledWith(101);
+      expect(api.getSession).toHaveBeenCalledTimes(1);
       expect(screen.getByTestId('user-name')).toHaveTextContent('Alice');
     });
+    expect(getItem).not.toHaveBeenCalledWith('access_token');
+    expect(getItem).not.toHaveBeenCalledWith('refresh_token');
+    getItem.mockRestore();
   });
 
-  it('fetches user when only refresh_token is present in localStorage', async () => {
-    localStorage.setItem('refresh_token', 'mock_refresh_token');
-    jwtDecode.mockReturnValue({ user_id: 202 });
-    api.getUser.mockResolvedValue({ data: { id: 202, name: 'Bob' } });
+  it('logs out and navigates to /login when the session is rejected', async () => {
+    api.getSession.mockRejectedValue({ response: { status: 401 } });
+    authService.logout.mockResolvedValue();
 
     render(
       <UserProvider>
@@ -69,21 +67,22 @@ describe('UserProvider', () => {
     );
 
     await waitFor(() => {
-      expect(jwtDecode).toHaveBeenCalledWith('mock_refresh_token');
-      expect(api.getUser).toHaveBeenCalledWith(202);
-      expect(screen.getByTestId('user-name')).toHaveTextContent('Bob');
+      expect(authService.logout).toHaveBeenCalled();
+      expect(mockNavigate).toHaveBeenCalledWith('/login');
     });
+    expect(screen.getByTestId('user-name')).toHaveTextContent('No User');
   });
 
-  it('does not attempt to fetch user when neither token is present', async () => {
+  it('keeps the user on non-auth errors', async () => {
+    api.getSession.mockRejectedValue({ response: { status: 500 } });
+
     render(
       <UserProvider>
         <TestConsumer />
       </UserProvider>
     );
 
-    expect(screen.getByTestId('user-name')).toHaveTextContent('No User');
-    expect(api.getUser).not.toHaveBeenCalled();
-    expect(jwtDecode).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.getSession).toHaveBeenCalled());
+    expect(authService.logout).not.toHaveBeenCalled();
   });
 });

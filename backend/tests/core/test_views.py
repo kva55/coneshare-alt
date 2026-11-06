@@ -364,21 +364,6 @@ class TestOrganizationAccessPermissions:
 
 
 @pytest.mark.django_db
-class TestAuthEndpointKeyRejection:
-
-    def test_logout_rejects_other_user_refresh_token(self, api_client, user, user2):
-        """LogoutView rejects refresh tokens belonging to a different user."""
-        other_refresh = RefreshToken.for_user(user2)
-        api_client.force_authenticate(user=user)
-        resp = api_client.post('/api/v1/logout/', {'refresh': str(other_refresh)}, format='json')
-        assert resp.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_logout_succeeds_with_own_refresh_token(self, api_client, user):
-        """LogoutView successfully blacklists the requesting user's refresh token."""
-        own_refresh = RefreshToken.for_user(user)
-        api_client.force_authenticate(user=user)
-        resp = api_client.post('/api/v1/logout/', {'refresh': str(own_refresh)}, format='json')
-        assert resp.status_code == status.HTTP_205_RESET_CONTENT
 
 
 @pytest.mark.django_db
@@ -396,7 +381,7 @@ class TestTokenRevocationOnLifecycleEvents:
         assert resp.status_code == status.HTTP_204_NO_CONTENT
 
         # Attempt to use the prior refresh token should fail with 401 Unauthorized
-        refresh_resp = api_client.post('/api/v1/token/refresh/', {'refresh': str(prior_refresh)}, format='json')
+        refresh_resp = APIClient(HTTP_COOKIE=f'cs_refresh={prior_refresh}').post('/api/v1/token/refresh/', format='json')
         assert refresh_resp.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_user_deactivation_blacklists_refresh_tokens(self, api_client, admin_user, user):
@@ -407,7 +392,7 @@ class TestTokenRevocationOnLifecycleEvents:
         assert patch_resp.status_code == status.HTTP_200_OK
 
         # Attempt to use the prior refresh token should fail with 401 Unauthorized
-        refresh_resp = api_client.post('/api/v1/token/refresh/', {'refresh': str(prior_refresh)}, format='json')
+        refresh_resp = APIClient(HTTP_COOKIE=f'cs_refresh={prior_refresh}').post('/api/v1/token/refresh/', format='json')
         assert refresh_resp.status_code == status.HTTP_401_UNAUTHORIZED
 
     def test_user_deletion_blacklists_refresh_tokens(self, api_client, admin_user, user):
@@ -418,7 +403,7 @@ class TestTokenRevocationOnLifecycleEvents:
         assert del_resp.status_code == status.HTTP_204_NO_CONTENT
 
         # Attempt to use the prior refresh token should fail with 401 Unauthorized
-        refresh_resp = api_client.post('/api/v1/token/refresh/', {'refresh': str(prior_refresh)}, format='json')
+        refresh_resp = APIClient(HTTP_COOKIE=f'cs_refresh={prior_refresh}').post('/api/v1/token/refresh/', format='json')
         assert refresh_resp.status_code == status.HTTP_401_UNAUTHORIZED
 
 

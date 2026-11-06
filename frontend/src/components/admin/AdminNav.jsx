@@ -10,6 +10,8 @@ export function AdminNav() {
     { to: '/admin/branding', label: t('admin.branding') },
     { to: '/admin/users', label: t('admin.users') },
     { to: '/admin/datarooms', label: t('admin.datarooms') },
+    { to: '/admin/retention', label: t('admin.retention', { defaultValue: 'Data retention' }) },
+    { to: '/admin/security', label: t('admin.security', { defaultValue: 'Security' }) },
     { to: '/admin/login-activity', label: t('admin.loginActivity') },
   ];
 

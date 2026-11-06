@@ -13,6 +13,7 @@ urlpatterns = [
     path('uploads/document/request/', views.DocumentUploadRequestView.as_view(), name='document-upload-request'),
     path('uploads/document/finalize/', views.DocumentUploadFinalizeView.as_view(), name='document-upload-finalize'),
     path('documents/<str:document_id>/preview-data/', views.DocumentPreviewDataView.as_view(), name='document-preview-data'),
+    path('documents/<str:document_id>/pages/<int:page_number>/', views.DocumentPageImageView.as_view(), name='document-page-image'),
     path('documents/<str:document_id>/download/', views.DocumentDownloadView.as_view(), name='document-download'),
     path('actions/move/', views.MoveItemsView.as_view(), name='move-items'),
     path('folders/root/', views.RootFolderView.as_view(), name='root-folder-detail'),

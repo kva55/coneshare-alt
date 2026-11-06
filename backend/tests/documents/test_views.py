@@ -948,8 +948,10 @@ def test_get_document_preview_data_success(mock_fs_download_url, api_client, use
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert len(data['pages']) == 1
-    assert data['pages'][0]['url'] == "http://test.coneshare.com/files/download/some-token"
-    mock_fs_download_url.assert_called_once_with(page.storage_key, is_internal=False)
+    assert data['pages'][0]['page_number'] == 1
+    assert 'url' not in data['pages'][0]   # pages are loaded through the script-only page endpoint
+    # no file-server URL is minted for the page image itself
+    assert page.storage_key not in [c.args[0] for c in mock_fs_download_url.call_args_list]
 
 
 

@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from 'react';
-import { getDocumentPreviewData, rebuildDocumentPreview } from '../../services/api';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { getDocumentPreviewData, rebuildDocumentPreview, fetchDocumentPageBlob } from '../../services/api';
 import {
   Dialog,
   DialogContent,
@@ -14,7 +14,7 @@ import {
   isPreviewPending,
 } from '../../utils/previewState';
 import { ViewerToolbar } from '../viewer/ViewerToolbar';
-import { printPdf, printImages } from '../../lib/print';
+import { printPdf } from '../../lib/print';
 
 const PREVIEW_POLL_INTERVAL_MS = 3000;
 
@@ -147,14 +147,17 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
     }
   };
 
+  // Pages are fetched by script (never a URL) and painted into canvases.
+  const loadPage = useCallback(
+    (pageNumber, options) => fetchDocumentPageBlob(documentId, pageNumber, options),
+    [documentId]
+  );
+
   const handlePrint = () => {
     if (!documentData) return;
 
     if (documentData.download_url && documentData.type === 'pdf') {
       printPdf(documentData.download_url);
-    } else {
-      const imageUrls = documentData.pages?.map((p) => p.url) || [];
-      printImages(imageUrls);
     }
   };
 
@@ -198,6 +201,7 @@ export function DocumentPreviewModal({ documentId, versionId = null, isOpen, onO
             <PreviewViewer
               ref={viewerComponentRef}
               documentData={documentData}
+              loadPage={loadPage}
               zoomLevel={zoomLevel}
               onPageChange={setCurrentPage}
             />

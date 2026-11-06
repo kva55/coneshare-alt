@@ -94,7 +94,7 @@ export function PageViewsChart({ pageViews, documentType }) {
 
   // Aggregate views by page_number to prevent duplicate key warnings
   const uniquePageViews = Object.values(
-    pageViews.reduce((acc, { page_number, duration_seconds, url, scroll_percentage }) => {
+    pageViews.reduce((acc, { page_number, duration_seconds, scroll_percentage }) => {
       if (acc[page_number]) {
         acc[page_number].duration_seconds += duration_seconds;
         if (scroll_percentage != null) {
@@ -103,12 +103,8 @@ export function PageViewsChart({ pageViews, documentType }) {
             scroll_percentage
           );
         }
-        // Prefer a valid URL if the existing one is missing.
-        if (!acc[page_number].url && url) {
-          acc[page_number].url = url;
-        }
       } else {
-        acc[page_number] = { page_number, url, duration_seconds, scroll_percentage };
+        acc[page_number] = { page_number, duration_seconds, scroll_percentage };
       }
       return acc;
     }, {})    
@@ -146,19 +142,13 @@ export function PageViewsChart({ pageViews, documentType }) {
                       />
                     </div>
                   </TooltipTrigger>
-                  {(view.url || (isMarkdown && view.scroll_percentage != null)) && (
-                    <TooltipContent>
-                      {view.url ? (
-                        <img
-                          src={view.url}
-                          alt={`Page ${view.page_number} preview`}
-                          className="h-48 w-auto rounded"
-                        />
-                      ) : (
-                        <p className="text-xs">{t('viewSessions.readingDepth', { defaultValue: 'Read depth' })}: {view.scroll_percentage}%</p>
-                      )}
-                    </TooltipContent>
-                  )}
+                  <TooltipContent>
+                    <p className="text-xs">
+                      {isMarkdown && view.scroll_percentage != null
+                        ? `${t('viewSessions.readingDepth', { defaultValue: 'Read depth' })}: ${view.scroll_percentage}%`
+                        : `${t('viewSessions.pageNumber', { number: view.page_number })}: ${formatDuration(view.duration_seconds)}`}
+                    </p>
+                  </TooltipContent>
                 </Tooltip>
                 <span className="w-16 flex-shrink-0 text-left font-medium text-gray-800">
                   {formatDuration(view.duration_seconds)}

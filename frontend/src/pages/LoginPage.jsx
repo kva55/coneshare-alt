@@ -6,6 +6,7 @@ import { APP_DISPLAY_VERSION } from '../lib/constants'
 import { Button } from '../components/ui/Button'
 import { useBranding } from '../contexts/BrandingProvider'
 import { LanguagePicker } from '../components/common/LanguagePicker'
+import { LoginNotice } from '../components/common/LoginNotice'
 
 function LoginPage() {
   const navigate = useNavigate()
@@ -66,6 +67,7 @@ function LoginPage() {
             {t('auth.welcomeBack', { brandName })}
           </p>
         </div>
+        <LoginNotice />
         <form onSubmit={handleSubmit} className="mt-8 space-y-6">
           <div className="space-y-4 rounded-md shadow-sm">
             <div>

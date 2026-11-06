@@ -162,6 +162,9 @@ class Document(BaseModel):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='documents_created')
     metadata = models.JSONField(blank=True, default=dict)
     
+    # Hard-delete this file at this time (data retention). Separate from any share-link expiry.
+    delete_after = models.DateTimeField(null=True, blank=True, db_index=True)
+
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     deleted_by = models.ForeignKey(
         User,

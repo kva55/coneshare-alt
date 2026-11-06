@@ -1,15 +1,13 @@
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional
-from urllib.parse import urljoin
 
-from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
 from core import services as core_services
 from documents import fileserver
-from documents.models import Document, DocumentVersion, DocumentPage
+from documents.models import Document, DocumentVersion
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +22,6 @@ class BasePreviewRenderer(ABC):
     no mutable attributes may be stored on `self` across requests to guarantee
     thread safety under multi-threaded WSGI/ASGI workers.
     """
-
-    can_reuse_page_url_for_download: bool = False
 
     @classmethod
     @abstractmethod
@@ -171,24 +167,17 @@ class BasePreviewRenderer(ABC):
         dataroom_document_id=None,
         enable_watermark_override=None,
     ) -> list:
-        """Prepares a list of page data with absolute URLs for this document version."""
+        """
+        Describes the pages of this version for the viewer.
+
+        Page images are never exposed as URLs: the viewer loads each page through an
+        authenticated POST endpoint and paints it into a canvas (see core/fetch_guard.py).
+        Share-link viewers do not receive the extracted text layer, so page text cannot be
+        selected or copied from the viewer.
+        """
         pages_data = []
         if version.has_pages:
-            watermark_enabled = (
-                enable_watermark_override
-                if enable_watermark_override is not None
-                else (share_link.enable_watermark if share_link else False)
-            )
-            is_watermarked = bool(share_link and watermark_enabled)
-            pages = version.pages.order_by('page_number')
-            for page in pages:
-                url = self._build_page_url(
-                    page_number=page.page_number,
-                    storage_key=page.storage_key,
-                    share_link=share_link,
-                    dataroom_document_id=dataroom_document_id,
-                    is_watermarked=is_watermarked,
-                )
+            for page in version.pages.order_by('page_number'):
                 safe_metadata = (
                     {k: v for k, v in page.metadata.items() if k != 'text_content'}
                     if isinstance(page.metadata, dict)
@@ -196,12 +185,11 @@ class BasePreviewRenderer(ABC):
                 )
                 text_content = (
                     {"lines": []}
-                    if is_watermarked
+                    if share_link is not None
                     else (page.text_content if isinstance(page.text_content, dict) else {"lines": []})
                 )
                 pages_data.append({
                     'page_number': page.page_number,
-                    'url': url,
                     'metadata': safe_metadata,
                     'page_links': page.page_links if isinstance(page.page_links, dict) else {'links': []},
                     'text_content': text_content,
@@ -214,9 +202,7 @@ class BasePreviewRenderer(ABC):
         version: DocumentVersion,
         pages_data: list = None
     ) -> Optional[str]:
-        """Returns the download URL for the original asset, reusing page 1 URL if applicable."""
-        if pages_data and self.can_reuse_page_url_for_download:
-            return pages_data[0]['url']
+        """Returns the download URL for the original asset."""
         storage_key = version.original_storage_key or version.storage_key
         if storage_key:
             try:
@@ -226,24 +212,3 @@ class BasePreviewRenderer(ABC):
             except APIException:
                 return None
         return None
-
-    def _build_page_url(
-        self,
-        page_number: int,
-        storage_key: str,
-        share_link=None,
-        dataroom_document_id=None,
-        is_watermarked: bool = False,
-        filename: str = None,
-    ) -> str:
-        """Builds an absolute internal fileserver URL or public sharelink/watermark URL."""
-        if share_link:
-            base_url_part = "render-page" if is_watermarked else "page"
-            page_url = f"/api/v1/links/{share_link.slug}/{base_url_part}/{page_number}/"
-            if share_link.dataroom and dataroom_document_id:
-                page_url += f"?dataroom_document_id={dataroom_document_id}"
-            return urljoin(settings.SITE_DOMAIN, page_url)
-        kwargs = {'is_internal': False}
-        if filename is not None:
-            kwargs['filename'] = filename
-        return fileserver.fileserver_client.generate_download_url(storage_key, **kwargs)

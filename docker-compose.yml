@@ -12,15 +12,23 @@ services:
       context: ./core
       dockerfile: Dockerfile-dev
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    # Not published on the host: the backend reaches it as core:8080 and browsers
+    # only reach /files/... through the frontend proxy (SITE_DOMAIN).
+    expose:
+      - "8080"
     env_file: .env
+    environment:
+      # TLS for the file service (certificates from ./certs, see scripts/gen-certs.sh). Empty = plain HTTP.
+      - TLS_CERT_FILE=${CORE_TLS_CERT_FILE-/certs/core.crt}
+      - TLS_KEY_FILE=${CORE_TLS_KEY_FILE-/certs/core.key}
     volumes:
       - ./core:/app
       - ~/.coneshare-data:/storage
+      - ./certs:/certs:ro
     healthcheck:
       # The dev image compiles the service with air on start; allow time for the first build.
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      # Checked on the loopback address inside the container, so the certificate name is not tested here.
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://127.0.0.1:8080/health || wget -qO- http://127.0.0.1:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -36,8 +44,9 @@ services:
     # command: tail -f /dev/null
     volumes:
       - ./backend:/app
+      - ./certs:/certs:ro
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # dev only; bound to localhost (plain HTTP: use the HTTPS front door for the app)
     restart: unless-stopped
     depends_on:
       redis:
@@ -50,9 +59,14 @@ services:
     <<: *default-logging
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --save "" --appendonly no
+    # TLS only (the plain port is off). Nothing is persisted: the cache and queue hold no documents.
+    command: >
+      redis-server --save "" --appendonly no --port 0 --tls-port 6379
+      --tls-cert-file /certs/redis.crt --tls-key-file /certs/redis.key --tls-ca-cert-file /certs/ca.crt
+      --tls-auth-clients no --tls-protocols "TLSv1.2 TLSv1.3"
     volumes:
       - redis_data:/data
+      - ./certs:/certs:ro
 
   celery_worker:
     <<: *default-logging
@@ -60,6 +74,7 @@ services:
     command: celery -A backend worker -l INFO -Q celery --concurrency=${CELERY_WORKER_CONCURRENCY:-4}
     volumes:
       - ./backend:/app
+      - ./certs:/certs:ro
     restart: unless-stopped
     depends_on:
       backend:
@@ -76,6 +91,7 @@ services:
     command: celery -A backend beat -l INFO
     volumes:
       - ./backend:/app
+      - ./certs:/certs:ro
     restart: unless-stopped
     depends_on:
       - backend
@@ -91,11 +107,32 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    ports:
-      - "5173:5173"
+      - ./certs:/certs:ro
+    environment:
+      # lets the dev server report requests it answers itself (scans of paths the app never sees)
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      - CORE_PROXY_TARGET=${CORE_API_URL:-http://core:8080}
+      - NODE_EXTRA_CA_CERTS=/certs/ca.crt
+    expose:
+      - "5173"   # reached through the HTTPS front door (proxy), not published on the host
     restart: unless-stopped
     depends_on:
       - backend
+
+  # HTTPS front door: the only way into the app from the host. TLS 1.2+, certificate from ./certs.
+  proxy:
+    <<: *default-logging
+    image: nginx:1.27-alpine
+    profiles: ["tls"]   # started when TLS is on (the default); see quickstart.sh
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./deploy/nginx/edge.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/security-headers.conf:/etc/nginx/snippets/security-headers.conf:ro
+      - ./certs:/certs:ro
+    depends_on:
+      - frontend
 
 volumes:
   redis_data:

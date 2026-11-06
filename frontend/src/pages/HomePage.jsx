@@ -68,6 +68,11 @@ function HomePage() {
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">{t('dashboard.latestViewSessions')}</h2>
             <Button asChild variant="link">
+              <Link to="/analytics/access-events">
+                {t('accessEvents.title', { defaultValue: 'Access activity' })}
+              </Link>
+            </Button>
+            <Button asChild variant="link">
               <Link to="/analytics/view-sessions">
                 {t('common.viewAll')} <ArrowRight className="ml-2 h-4 w-4" />
               </Link>

@@ -67,9 +67,11 @@ class FileServerClient:
             return urljoin(self.base_url, relative_url)
         return urljoin(settings.SITE_DOMAIN, relative_url)
 
-    def delete_file(self, storage_key: str):
-        """Requests deletion of a file from the file server."""
+    def delete_file(self, storage_key: str, secure: bool = False):
+        """Requests deletion of a file; ``secure`` overwrites its data first (data retention)."""
         data = {'storage_key': storage_key}
+        if secure:
+            data['secure'] = True
         self._post('/internal/v1/delete-file', data, expect_json=False)
 
     def get_file_info(self, storage_key: str) -> dict:

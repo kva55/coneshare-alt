@@ -1,146 +1,82 @@
+"""Event fan-out: one event can send the "viewed" email and/or signed webhooks."""
 import logging
 import uuid
 
-from django.db.models import Q
+from django.core.cache import cache
 
-from core.models import Organization, User
-
-from .models import AutomationDelivery, AutomationRule, AutomationDestination
-from .constants import EMAIL_COALESCE_DEBOUNCE_SECONDS
+from .constants import (INTERNAL_PAYLOAD_KEYS, VIEW_EMAIL_DEDUPE_SECONDS, VIEW_EMAIL_EVENTS,
+                        WEBHOOK_EVENTS)
+from .models import WebhookDelivery, WebhookEndpoint
 
 logger = logging.getLogger(__name__)
 
 
-def _rule_matches_scope(rule, payload):
-    share_link_id = payload.get('share_link_id')
-    dataroom_id = payload.get('dataroom_id')
-
-    if rule.scope_type == AutomationRule.ScopeType.GLOBAL:
-        return True
-    if rule.scope_type == AutomationRule.ScopeType.SHARE_LINK:
-        return bool(share_link_id) and str(rule.share_link_id) == str(share_link_id)
-    if rule.scope_type == AutomationRule.ScopeType.DATAROOM:
-        return bool(dataroom_id) and str(rule.dataroom_id) == str(dataroom_id)
-    return False
+def public_payload(payload: dict) -> dict:
+    """What a webhook receiver is told: the event data minus internal identifiers."""
+    return {k: v for k, v in payload.items() if k not in INTERNAL_PAYLOAD_KEYS}
 
 
-def _rule_subscribes_event(rule, event_type):
-    events = rule.subscribed_events or []
-    if not isinstance(events, list):
+def dispatch_webhooks(event_type: str, payload: dict) -> int:
+    """Create + queue one delivery per active endpoint of the organization subscribed to the event."""
+    if event_type not in WEBHOOK_EVENTS:
+        return 0
+    organization_id = payload.get('organization_id')
+    if not organization_id:
+        logger.warning('Webhook event dropped: missing organization_id for event=%s', event_type)
+        return 0
+
+    from .tasks import deliver_webhook_task  # local: tasks imports this module
+    created = 0
+    for endpoint in WebhookEndpoint.objects.filter(organization_id=organization_id, is_active=True):
+        if event_type not in (endpoint.events or []):
+            continue
+        delivery = WebhookDelivery.objects.create(
+            endpoint=endpoint, event_type=event_type, payload=public_payload(payload),
+            idempotency_key=str(uuid.uuid4()),
+        )
+        deliver_webhook_task.delay(str(delivery.id))
+        created += 1
+    return created
+
+
+def send_view_email(event_type: str, payload: dict) -> bool:
+    """"Email me when someone views my document": only for links that switched it on."""
+    if event_type not in VIEW_EMAIL_EVENTS:
         return False
-    return event_type in events
+    from core.mailer import send_app_mail
+    from core.models import User
+    from sharelinks.models import ShareLink
 
+    link = ShareLink.objects.select_related('document', 'dataroom').filter(id=payload.get('share_link_id')).first()
+    if link is None or not link.receive_email_notification:
+        return False
+    recipient = User.objects.filter(id=payload.get('owner_user_id'), is_active=True).first()
+    if recipient is None or not recipient.email:
+        return False
 
-def ensure_default_email_automation(owner: User, organization: Organization):
-    """
-    Ensures that the owner has the default global email rule and destination provisioned.
-    Runs during administrative changes (like enabling email notifications on a ShareLink)
-    to keep database writes off the visitor page view hot path.
-    """
-    if not owner or not owner.email:
-        return
+    visitor = (payload.get('viewer_email') or payload.get('ip_address') or 'anonymous')
+    key = f"viewmail:{link.id}:{event_type}:{visitor}"
+    if not cache.add(key, 1, VIEW_EMAIL_DEDUPE_SECONDS):
+        return False
 
+    target = payload.get('document_name') or payload.get('dataroom_name') or 'your shared item'
+    verb = {'document_viewed': 'viewed', 'dataroom_opened': 'opened', 'document_downloaded': 'downloaded'}[event_type]
+    lines = [f"Someone {verb} \"{target}\".", '']
+    if payload.get('viewer_email'):
+        lines.append(f"Viewer:  {payload['viewer_email']}")
+    for label, key_name in (('Location', 'location'), ('Link', 'share_link_name')):
+        if payload.get(key_name):
+            lines.append(f"{label}:  {payload[key_name]}")
     try:
-        # 1. Get or create the default email destination for the owner
-        dest_name = f"Default Email ({owner.email})"
-        destination, created_dest = AutomationDestination.objects.get_or_create(
-            organization=organization,
-            created_by=owner,
-            destination_type=AutomationDestination.DestinationType.EMAIL,
-            defaults={
-                'name': dest_name,
-                'endpoint_url': None
-            }
-        )
-        if not created_dest and destination.name != dest_name:
-            destination.name = dest_name
-            destination.save(update_fields=['name', 'updated_at'])
-        
-        # 2. Get or create the default global rule subscribing to view/open events
-        rule_name = "Default Email Notifications"
-        rule, created_rule = AutomationRule.objects.get_or_create(
-            organization=organization,
-            created_by=owner,
-            scope_type=AutomationRule.ScopeType.GLOBAL,
-            name=rule_name,
-            defaults={
-                'subscribed_events': ['document_viewed', 'dataroom_opened', 'document_downloaded'],
-                'is_active': True
-            }
-        )
-        if not rule.destinations.filter(id=destination.id).exists():
-            rule.destinations.add(destination)
-    except Exception as e:
-        logger.warning('Failed to provision default email rule for owner_id=%s: %s', owner.id, e)
+        send_app_mail(subject=f"Your {('document' if link.document_id else 'dataroom')} was {verb}: {target}",
+                      text='\n'.join(lines), recipients=recipient.email)
+    except Exception:
+        logger.exception('Failed to send view notification email')
+        return False
+    return True
 
 
 def dispatch_automation_event(event_type: str, payload: dict) -> int:
-    """
-    Matches active rules for the event and creates pending AutomationDelivery rows.
-    Returns the number of delivery rows created.
-    """
-    organization_id = payload.get('organization_id')
-    if not organization_id:
-        logger.warning('Automation event dropped: missing organization_id for event=%s', event_type)
-        return 0
-
-    try:
-        organization = Organization.objects.get(id=organization_id)
-    except Organization.DoesNotExist:
-        logger.warning('Automation event dropped: invalid organization_id=%s for event=%s', organization_id, event_type)
-        return 0
-
-    owner_user_id = payload.get('owner_user_id')
-    dataroom_owner_user_id = payload.get('dataroom_owner_user_id')
-    dataroom_id = payload.get('dataroom_id')
-
-    if not owner_user_id:
-        logger.warning('Automation event dropped: missing owner_user_id for event=%s organization_id=%s', event_type, organization_id)
-        return 0
-
-    # Match rules created by the primary link owner (global, link, or dataroom scope)
-    rule_q = Q(created_by_id=owner_user_id)
-
-    # If the event happened in a dataroom and the dataroom owner is distinct, also match the
-    # dataroom owner's DATAROOM-scoped rules for this specific dataroom.
-    if dataroom_id and dataroom_owner_user_id and str(dataroom_owner_user_id) != str(owner_user_id):
-        rule_q |= Q(
-            created_by_id=dataroom_owner_user_id,
-            created_by__is_active=True,
-            scope_type=AutomationRule.ScopeType.DATAROOM,
-            dataroom_id=dataroom_id,
-        )
-
-    rules = AutomationRule.objects.filter(
-        organization=organization,
-        is_active=True,
-        created_by__is_active=True,
-    ).filter(rule_q)
-    rules = rules.prefetch_related('destinations')
-
-    created = 0
-    for rule in rules:
-        if not _rule_subscribes_event(rule, event_type):
-            continue
-        if not _rule_matches_scope(rule, payload):
-            continue
-
-        for destination in [d for d in rule.destinations.all() if d.is_active]:
-            delivery = AutomationDelivery.objects.create(
-                organization=organization,
-                rule=rule,
-                destination=destination,
-                event_type=event_type,
-                payload=payload,
-                idempotency_key=str(uuid.uuid4()),
-            )
-            # Queue delivery execution immediately after creating the log row.
-            # Import locally to avoid circular imports (tasks imports this service).
-            from .tasks import deliver_automation_delivery_task
-            if destination.destination_type == 'email':
-                deliver_automation_delivery_task.apply_async(args=[str(delivery.id)], countdown=EMAIL_COALESCE_DEBOUNCE_SECONDS)
-            else:
-                deliver_automation_delivery_task.delay(str(delivery.id))
-            created += 1
-
-    return created
+    """Entry point used by the Celery task. Returns the number of webhook deliveries created."""
+    send_view_email(event_type, payload)
+    return dispatch_webhooks(event_type, payload)

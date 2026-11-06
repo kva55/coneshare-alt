@@ -1,9 +1,8 @@
 import { useEffect, useState, useRef } from "react";
-import { jwtDecode } from "jwt-decode";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { useUser } from "../contexts/UserProvider";
-import { getUser, updateUser } from "../services/api";
+import { getSession, updateUser } from "../services/api";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
@@ -30,28 +29,20 @@ function UserSettingsPage() {
   useEffect(() => {
     let isMounted = true;
     const fetchUser = async () => {
-      const token = localStorage.getItem("access_token");
-      if (token) {
-        try {
-          const decoded = jwtDecode(token);
-          const response = await getUser(decoded.user_id);
-          if (isMounted) {
-            setUser(response.data);
-            setName(response.data.name || "");
-            setLanguage(response.data.language || i18n.language || "en");
-            setAvatarPreview(response.data.avatar_url || null);
-          }
-        } catch (error) {
-          if (isMounted) {
-            console.error("Failed to fetch user:", error);
-            toast.error(t('settings.profileLoadFailed'));
-          }
-        } finally {
-          if (isMounted) {
-            setIsLoading(false);
-          }
+      try {
+        const response = await getSession();
+        if (isMounted) {
+          setUser(response.data);
+          setName(response.data.name || "");
+          setLanguage(response.data.language || i18n.language || "en");
+          setAvatarPreview(response.data.avatar_url || null);
         }
-      } else {
+      } catch (error) {
+        if (isMounted) {
+          console.error("Failed to fetch user:", error);
+          toast.error(t('settings.profileLoadFailed'));
+        }
+      } finally {
         if (isMounted) {
           setIsLoading(false);
         }

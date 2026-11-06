@@ -32,6 +32,7 @@ import { CollaboratorsAvatarGroup } from '../components/datarooms/CollaboratorsA
 import { TransferOwnershipDialog } from '../components/datarooms/TransferOwnershipDialog';
 import { DataroomBannerGallery } from '../components/viewer/DataroomBannerGallery';
 import { RenameItemDialog } from '../components/dialogs/RenameItemDialog';
+import { FileAccessDialog } from '../components/checkout/FileAccessDialog';
 import { Skeleton } from '../components/ui/Skeleton';
 import { Input } from '../components/ui/Input';
 import { Label } from '../components/ui/Label';
@@ -88,6 +89,9 @@ export function DataroomPage() {
   const [viewsCurrentPage, setViewsCurrentPage] = useState(1);
   const [isRemoveContentDialogOpen, setIsRemoveContentDialogOpen] = useState(false);
   const [itemToRename, setItemToRename] = useState(null);
+  // files whose check-out access is being set (offered right after an upload, or from a file's menu)
+  const [accessFiles, setAccessFiles] = useState([]);
+  const [accessJustUploaded, setAccessJustUploaded] = useState(false);
   const [itemToRemove, setItemToRemove] = useState(null);
   const [isTransferOwnershipOpen, setIsTransferOwnershipOpen] = useState(false);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
@@ -203,11 +207,14 @@ export function DataroomPage() {
 
     const results = await Promise.all(uploadPromises);
     let successfulUploads = 0;
+    const uploaded = [];
 
     results.forEach(result => {
       if (result.status === 'fulfilled') {
         updateUpload(result.id, { status: 'complete', progress: 100 });
         successfulUploads++;
+        const created = result.value?.data;
+        if (created?.id) uploaded.push({ id: created.id, name: created.name || created.document?.name || '' });
       } else {
         const errorMessage = result.reason?.response?.data?.detail || result.reason?.message || 'Upload failed';
         updateUpload(result.id, { status: 'error', error: errorMessage });
@@ -217,6 +224,10 @@ export function DataroomPage() {
 
     if (successfulUploads > 0) {
       fetchContent();
+    }
+    if (uploaded.length > 0) {   // set the access of what was just uploaded, before anything is shared
+      setAccessJustUploaded(true);
+      setAccessFiles(uploaded);
     }
   };
 
@@ -1076,6 +1087,7 @@ export function DataroomPage() {
               onSort={handleSort}
               sortConfig={sortConfig}
               onRename={handleRenameItem}
+              onCheckoutAccess={(item) => { setAccessJustUploaded(false); setAccessFiles([{ id: item.id, name: item.name }]); }}
               onDelete={handleRemoveItem}
               deleteLabel={t('common.remove')}
               onToggleStar={handleToggleStar}
@@ -1687,6 +1699,13 @@ export function DataroomPage() {
         description={t('datarooms.removeItemsDescription')}
         confirmText={t('datarooms.remove')}
       />
+      <FileAccessDialog
+        open={accessFiles.length > 0}
+        onOpenChange={(isOpen) => { if (!isOpen) setAccessFiles([]); }}
+        files={accessFiles}
+        justUploaded={accessJustUploaded}
+      />
+
       {itemToRename && (
         <RenameItemDialog
           isOpen={!!itemToRename}

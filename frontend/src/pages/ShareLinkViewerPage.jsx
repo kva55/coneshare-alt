@@ -1,7 +1,11 @@
-import { useEffect, useState, useRef, lazy, Suspense } from 'react';
+import { useEffect, useState, useRef, useCallback, lazy, Suspense } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { FileDown, MessageCircle, Info, X, AlertCircle, Clock } from 'lucide-react';
 import { PasswordForm } from '../components/viewer/PasswordForm';
+import { useCaptureResponse, useViewerEvents } from '../hooks/useViewerEvents';
+import { FocusBlurOverlay } from '../components/viewer/FocusBlurOverlay';
+import { ViewingProtectionContext, useFocusLease } from '../lib/viewingProtection';
+import { AccessCodeForm } from '../components/viewer/AccessCodeForm';
 import { EmailForm } from '../components/viewer/EmailForm';
 import { NDAForm } from '../components/viewer/NDAForm';
 import { GateLayout } from '../components/viewer/GateLayout';
@@ -14,7 +18,7 @@ import { ViewerErrorBoundary } from '../components/viewer/ViewerErrorBoundary';
 const DataroomViewer = lazy(() => import('../components/viewer/DataroomViewer').then(m => ({ default: m.DataroomViewer })));
 const PreviewViewer = lazy(() => import('../components/documents/PreviewViewer').then(m => ({ default: m.PreviewViewer })));
 const PreviewStatePanel = lazy(() => import('../components/documents/PreviewStatePanel').then(m => ({ default: m.PreviewStatePanel })));
-import { printPdf, printImages } from '../lib/print';
+import { printPdf } from '../lib/print';
 import { Skeleton } from '../components/ui/Skeleton';
 import {
   hasRenderablePages,
@@ -26,6 +30,8 @@ import {
   getPublicQnaSummary,
   getShareLinkPublicMeta,
   getShareLinkViewData,
+  fetchSharePageBlob,
+  fetchShareTiles,
 } from '../services/api';
 import { Button } from '../components/ui/Button';
 import { formatBytes } from '../lib/formatters';
@@ -101,6 +107,14 @@ export function ShareLinkViewerPage() {
 
   const [showPreviewBanner, setShowPreviewBanner] = useState(true);
   const [viewData, setViewData] = useState(null);
+  const capture = useCaptureResponse();
+  useViewerEvents(slug, Boolean(viewData) && !previewToken, {
+    actions: viewData?.link_settings?.capture_actions,
+    onAction: capture.onAction,
+  });
+  const blurWhenUnfocused = Boolean(viewData?.link_settings?.blur_when_unfocused);
+  const focusLease = useFocusLease(slug, Boolean(viewData) && blurWhenUnfocused);
+  const protection = { suspended: focusLease.suspended || capture.blurred };
   const [publicMeta, setPublicMeta] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -390,15 +404,27 @@ export function ShareLinkViewerPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentPage, totalPages]);
 
+  // Pages are fetched by script (never a URL) and painted into canvases.
+  const loadPage = useCallback(
+    (pageNumber, options) =>
+      fetchSharePageBlob(slug, pageNumber, { dataroomDocumentId: dataroomDocumentIdFromUrl, ...options }),
+    [slug, dataroomDocumentIdFromUrl]
+  );
+
+  // Present only for links with the restricted viewing pane (their pages arrive blurred).
+  const loadTiles = useCallback(
+    (pageNumber, options) =>
+      fetchShareTiles(slug, pageNumber, { dataroomDocumentId: dataroomDocumentIdFromUrl, ...options }),
+    [slug, dataroomDocumentIdFromUrl]
+  );
+
   const handlePrint = () => {
     if (!viewData || !viewData.link_settings?.allow_download) return;
 
+    // Printing is only offered when downloads are allowed; it prints the (watermarked) download.
     if (viewData.type === 'pdf' && downloadUrl) {
       const inlineUrl = downloadUrl.includes('?') ? `${downloadUrl}&inline=true` : `${downloadUrl}?inline=true`;
       printPdf(inlineUrl);
-    } else {
-      const imageUrls = viewData.pages?.map((p) => p.url) || [];
-      printImages(imageUrls);
     }
   };
 
@@ -407,6 +433,14 @@ export function ShareLinkViewerPage() {
     Boolean(dataroomVisitIdFromUrl) ||
     Boolean(dataroomDocumentIdFromUrl) ||
     Boolean(parentIdFromUrl);
+
+  if (capture.ended) {   // the owner chose to end viewing when this attempt is detected; the server has locked it
+    return (
+      <div className="flex min-h-screen items-center justify-center p-8 text-center">
+        <p role="alert" className="max-w-md">{t('viewer.endedByAction', { defaultValue: 'Viewing was ended because of an action that is not allowed here. Try again later.' })}</p>
+      </div>
+    );
+  }
 
   if (isLoading) {
     if (isDataroomTarget) {
@@ -419,6 +453,16 @@ export function ShareLinkViewerPage() {
           <Skeleton className="h-96 w-full" />
         </div>
       </div>
+    );
+  }
+
+  if (protectionType === 'allowlist') {
+    return (
+      <AccessCodeForm
+        slug={slug}
+        onSuccess={() => setRefetchTrigger((c) => c + 1)}
+        publicMeta={publicMeta}
+      />
     );
   }
 
@@ -508,6 +552,7 @@ export function ShareLinkViewerPage() {
 
   if (isDataroom && viewData) {
     return (
+      <ViewingProtectionContext.Provider value={protection}>
       <ViewerErrorBoundary>
         <Suspense
           fallback={
@@ -522,7 +567,9 @@ export function ShareLinkViewerPage() {
           )}
           <DataroomViewer data={viewData} slug={slug} viewId={viewId} publicMeta={publicMeta} />
         </Suspense>
+        <FocusBlurOverlay visible={(blurWhenUnfocused && !focusLease.focused) || capture.blurred} onResume={() => { capture.resume(); focusLease.recheck(); }} />
       </ViewerErrorBoundary>
+      </ViewingProtectionContext.Provider>
     );
   }
 
@@ -654,6 +701,7 @@ export function ShareLinkViewerPage() {
   }
 
   return (
+    <ViewingProtectionContext.Provider value={protection}>
     <div
       ref={viewerRef}
       className={`relative flex flex-col h-screen w-screen overflow-hidden transition-colors duration-300 bg-gray-50 transition-[padding] duration-200 ${isQnaOpen ? 'lg:pr-[34rem] xl:pr-[38rem]' : ''}`}
@@ -661,6 +709,7 @@ export function ShareLinkViewerPage() {
       {previewToken && showPreviewBanner && (
         <PreviewBanner onClose={() => setShowPreviewBanner(false)} />
       )}
+      <FocusBlurOverlay visible={(blurWhenUnfocused && !focusLease.focused) || capture.blurred} onResume={() => { capture.resume(); focusLease.recheck(); }} />
       <DocumentViewerHeader
         documentName={viewData?.name}
         brandName={brandName}
@@ -705,6 +754,8 @@ export function ShareLinkViewerPage() {
               <PreviewViewer
                 ref={viewerComponentRef}
                 documentData={viewData}
+                loadPage={loadPage}
+                loadTiles={viewData?.link_settings?.restricted_viewing_pane ? loadTiles : undefined}
                 zoomLevel={zoomLevel}
                 onPageChange={setCurrentPage}
                 viewId={viewId}
@@ -724,5 +775,6 @@ export function ShareLinkViewerPage() {
         </div>
       )}
     </div>
+    </ViewingProtectionContext.Provider>
   );
 }

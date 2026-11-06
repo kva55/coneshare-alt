@@ -1,5 +1,5 @@
 import React from "react";
-import { Bot, File, Home, LayoutGrid, Trash2 } from "lucide-react";
+import { Activity, Bot, PackageCheck, File, Home, LayoutGrid, Trash2 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -9,7 +9,9 @@ export const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: Home },
   { href: "/documents", label: "Documents", icon: File },
   { href: "/datarooms", label: "Datarooms", icon: LayoutGrid },
-  { href: "/automations", label: "Automations", icon: Bot },
+  { href: "/check-out-center", label: "Check Out Center", icon: PackageCheck },
+  { href: "/interactions", label: "Interaction Activity", icon: Activity },
+  { href: "/automations", label: "Notifications", icon: Bot },
   { href: "/trash", label: "Trash", icon: Trash2, hasDivider: true },
 ];
 
@@ -19,7 +21,9 @@ export function useNavItems() {
     { href: "/", label: t('nav.dashboard'), icon: Home },
     { href: "/documents", label: t('nav.documents'), icon: File },
     { href: "/datarooms", label: t('nav.datarooms'), icon: LayoutGrid },
-    { href: "/automations", label: t('nav.automations'), icon: Bot },
+    { href: "/check-out-center", label: t('nav.checkOutCenter', { defaultValue: 'Check Out Center' }), icon: PackageCheck },
+    { href: "/interactions", label: t('nav.interactions', { defaultValue: 'Interaction Activity' }), icon: Activity },
+    { href: "/automations", label: t('nav.automations', { defaultValue: 'Notifications' }), icon: Bot },
     { href: "/trash", label: t('nav.trash'), icon: Trash2, hasDivider: true },
   ];
 }

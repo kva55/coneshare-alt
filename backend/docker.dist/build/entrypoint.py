@@ -7,18 +7,35 @@ import sys
 import time
 from subprocess import check_call, Popen
 
+def _parse_id(name):
+    """Return PUID/PGID as a validated integer, or None when unset.
+
+    The value comes from the environment and is passed to usermod/groupmod, so it
+    must be a plain decimal id (never interpolated into a shell command).
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    if not re.fullmatch(r"[0-9]{1,10}", raw):
+        sys.exit(f"Invalid {name} {raw!r}: must be a numeric id.")
+    value = int(raw)
+    if value == 0 or value > 2147483647:
+        sys.exit(f"Invalid {name} {value}: must be between 1 and 2147483647 (root is not allowed).")
+    return value
+
+
 def change_ugid():
     """Change the UID/GID of the existing container user at runtime
     so they match the host user that owns the mounted files.
     """
-    puid = os.getenv("PUID")
-    pgid = os.getenv("PGID")
+    puid = _parse_id("PUID")
+    pgid = _parse_id("PGID")
 
-    if puid:
-        check_call(f'usermod -o -u {puid} coneshare', shell=True)
+    if puid is not None:
+        check_call(["usermod", "-o", "-u", str(puid), "coneshare"])
 
-    if pgid:
-        check_call(f'groupmod -o -g {pgid} coneshare', shell=True)
+    if pgid is not None:
+        check_call(["groupmod", "-o", "-g", str(pgid), "coneshare"])
 
 
 def configure_nginx_real_ip():
@@ -81,7 +98,7 @@ def main(argv):
         while 1:
             time.sleep(5)
     elif argv[1] == 'coneshare':
-        check_call("gosu coneshare bash -c 'rm -rf /tmp/gunicorn.pid'", shell=True)
+        check_call(["gosu", "coneshare", "rm", "-f", "/tmp/gunicorn.pid"])
 
         supervisord_proc = Popen(
             ["supervisord", "-n", "-c", "/home/coneshare/runtime/supervisord/supervisord.conf"]

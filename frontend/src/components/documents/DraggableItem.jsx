@@ -28,6 +28,7 @@ export function DraggableItem({
   onToggleStar,
   onDownload,
   onCopy,
+  onCheckoutAccess,
   isReadOnly = false,
   showActions = true,
   onItemClick,
@@ -230,6 +231,7 @@ export function DraggableItem({
               onShare={onShare}
               onDownload={onDownload}
               onCopy={onCopy}
+              onCheckoutAccess={onCheckoutAccess}
               deleteLabel={deleteLabel}
             />
           </div>

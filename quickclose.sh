@@ -7,9 +7,9 @@
 #
 # What gets deleted:
 #   - all coneshare containers, networks and named volumes (redis data)
-#   - all images used by the stack (coneshare:dev, coneshare:frontend, the core image, redis)
+#   - all images used by the stack (coneshare:dev, coneshare:frontend, the core image, redis, nginx)
 #   - ~/.coneshare-data            uploaded files stored by the Go file service
-#   - backend/db.sqlite3 (+ -journal/-wal/-shm), backend/media/* uploads, .env
+#   - backend/db.sqlite3 (+ -journal/-wal/-shm), backend/media/* uploads, .env, certs/ (TLS keys)
 #   - this project folder itself (unless --keep-code)
 #
 # Unpushed git commits in this folder are lost with the folder. Push first if you want to keep them.
@@ -18,6 +18,8 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 STORAGE_DIR="${HOME}/.coneshare-data"
 export COMPOSE_PROJECT_NAME=coneshare
+export COMPOSE_FILE="docker-compose.yml:docker-compose.plain.yml"   # including the TLS-off override
+export COMPOSE_PROFILES=tls   # the HTTPS front door (proxy) is in a profile; without this `down` would leave it running
 
 KEEP_CODE=0
 ASSUME_YES=0
@@ -88,6 +90,7 @@ fi
 if [[ $KEEP_CODE -eq 1 ]]; then
   log "Deleting local database, uploads and .env (keeping source code)"
   rm -f backend/db.sqlite3 backend/db.sqlite3-journal backend/db.sqlite3-wal backend/db.sqlite3-shm .env
+  rm -rf certs
   find backend/media -mindepth 1 ! -name .gitkeep -exec rm -rf {} + 2>/dev/null || sudo find backend/media -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
   log "Done. Source code kept in ${PROJECT_DIR}."
 else

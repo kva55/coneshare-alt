@@ -1,0 +1,7 @@
+A file request needs your approval
+
+File:      {{ file_name }}
+Datastore: {{ datastore_name }}
+Requested by: {{ email }}
+
+Approve or deny it in the admin area: {{ url }}

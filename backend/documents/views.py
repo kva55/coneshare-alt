@@ -1,10 +1,13 @@
 import logging
 import os
+
+import requests
 from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings  # noqa: F401 - patch target in tests
 from django.db import transaction
+from django.http import HttpResponse
 from django.db.models import Count, Sum, Value, CharField, BigIntegerField, F, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -16,6 +19,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
 
+from core.fetch_guard import is_script_fetch, no_store_headers, sniff_image_content_type
 from core.pagination import StandardResultsSetPagination
 
 
@@ -523,6 +527,51 @@ class DocumentDownloadView(APIView):
 
 
 @extend_schema(tags=['documents'])
+class DocumentPageImageView(APIView):
+    """
+    Delivers one rendered page of a document to its owner / dataroom collaborators.
+
+    Like the share-link page endpoint this is POST-only and script-only (see
+    core/fetch_guard.py): there is no page URL to open, share or hot-link. The bytes are
+    streamed through the application and painted into a canvas by the client.
+    """
+
+    @extend_schema(request=None, responses={200: None, 400: dict, 403: dict, 404: dict, 503: dict})
+    def post(self, request, document_id, page_number):
+        if not is_script_fetch(request):
+            return Response({"detail": "Pages can only be loaded by the viewer."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            document = get_document_queryset_for_user(request.user).get(id=document_id)
+        except Document.DoesNotExist:
+            return Response({"detail": "Access denied or document not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        primary_version = document.versions.filter(is_primary=True).first()
+        if not primary_version:
+            return Response({"detail": "Document version not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        source_key = get_renderer(primary_version).get_page_storage_key(primary_version, page_number)
+        if not source_key:
+            return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            download_url = fileserver_client.generate_download_url(source_key, is_internal=True)
+            source = requests.get(download_url, timeout=30)
+            source.raise_for_status()
+        except (APIException, requests.RequestException) as e:
+            logger.error("Failed to load page image from the file server: %s", type(e).__name__)
+            return Response(
+                {"detail": "Could not retrieve file. Please try again later."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        data = source.content
+        response = HttpResponse(data, content_type=sniff_image_content_type(data))
+        response["Content-Length"] = str(len(data))
+        return no_store_headers(response)
+
+
+@extend_schema(tags=['documents'])
 class DocumentPreviewDataView(APIView):
     """
     Provides data for rendering an internal document preview.
@@ -827,17 +876,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             share_link__document=document
         ).order_by('-viewed_at').select_related('share_link').prefetch_related('page_views')
 
-        # Optimization: pre-fetch all page image URLs for this document
-        primary_version = document.versions.filter(is_primary=True).first()
-        pages_map = {}
-        if primary_version:
-            if primary_version.has_pages:
-                for page in primary_version.pages.values('page_number', 'storage_key').order_by('page_number'):
-                    page_url = fileserver_client.generate_download_url(page['storage_key'], is_internal=False)
-                    pages_map[page['page_number']] = page_url
-
         serializer_context = self.get_serializer_context()
-        serializer_context['pages_map'] = pages_map
 
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(view_queryset, request, view=self)

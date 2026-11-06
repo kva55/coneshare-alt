@@ -42,6 +42,8 @@ group = "coneshare"
 
 # Log files (stream to stdout/stderr for container-native logging)
 accesslog = "-"
+# Access log without the query string: addresses can carry identifiers (see docs/fork/caching-and-urls.md).
+access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(m)s %(U)s %(H)s" %(s)s %(b)s "%(a)s"'
 errorlog = "-"
 
 # Logging level

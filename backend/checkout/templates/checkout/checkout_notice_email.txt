@@ -1,0 +1,8 @@
+A file was checked out
+
+File:      {{ file_name }}
+Datastore: {{ datastore_name }}
+By:        {{ email }}
+When:      {{ when }}
+Window:    {{ minutes }} minute(s)
+From IP:   {{ ip_address }}

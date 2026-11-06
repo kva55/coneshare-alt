@@ -1,7 +1,11 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,12 +28,59 @@ type Config struct {
 	StoragePath      string
 	InternalAPIToken string
 	ServerPort       string
+	// MaxUploadBytes caps a single upload body. 0 disables the cap.
+	MaxUploadBytes int64
+	// EncryptionMode is "required" (default: files are sealed at rest) or "off" (explicit opt-out).
+	EncryptionMode string
+	EncryptionKey  string
+	// Cipher is built from EncryptionKey; nil means files are stored as uploaded.
+	Cipher *FileCipher
+}
+
+// Published defaults that must never be accepted as the internal token.
+var knownPublicTokens = map[string]bool{
+	"supersecrettoken": true,
+	"changeme":         true,
+	"change-me":        true,
+	"secret":           true,
+}
+
+const minInternalTokenLength = 32
+const defaultMaxUploadBytes int64 = 500 * 1024 * 1024 // 500 MiB
+
+// validateConfig refuses to start with a missing, public or weak internal token.
+func validateConfig(c Config) error {
+	token := strings.TrimSpace(c.InternalAPIToken)
+	if token == "" {
+		return errors.New("INTERNAL_API_TOKEN must be set (generate one with: openssl rand -hex 32)")
+	}
+	if knownPublicTokens[token] {
+		return errors.New("INTERNAL_API_TOKEN uses a publicly known default value; generate a new one")
+	}
+	if len(token) < minInternalTokenLength {
+		return fmt.Errorf("INTERNAL_API_TOKEN must be at least %d characters", minInternalTokenLength)
+	}
+	if c.MaxUploadBytes < 0 {
+		return errors.New("MAX_UPLOAD_BYTES must not be negative")
+	}
+	switch c.EncryptionMode {
+	case "", "off":
+	case "required":
+		if _, err := NewFileCipher(c.EncryptionKey); err != nil {
+			return fmt.Errorf("storage encryption is required (STORAGE_ENCRYPTION=required): %w", err)
+		}
+	default:
+		return errors.New("STORAGE_ENCRYPTION must be \"required\" or \"off\"")
+	}
+	return nil
 }
 
 type URLRequest struct {
 	StorageKey    string `json:"storage_key"`
 	Filename      string `json:"filename"`
 	ExpirySeconds int    `json:"expiry_seconds,omitempty"`
+	// Secure asks delete-file to overwrite the data before unlinking it (data retention hard deletes).
+	Secure bool `json:"secure,omitempty"`
 }
 
 type URLResponse struct {
@@ -67,6 +119,26 @@ func main() {
 	}
 
 	config := loadConfig()
+	if err := validateConfig(config); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if config.EncryptionMode == "required" {
+		config.Cipher, _ = NewFileCipher(config.EncryptionKey) // validated above
+		log.Printf("Storage encryption at rest: ON (AES-256-GCM)")
+	} else {
+		log.Printf("WARNING: storage encryption at rest is OFF (STORAGE_ENCRYPTION=off)")
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-encrypt-existing" {
+		if config.Cipher == nil {
+			log.Fatal("-encrypt-existing needs STORAGE_ENCRYPTION=required and a key")
+		}
+		n, err := config.Cipher.EncryptExisting(config.StoragePath)
+		log.Printf("Encrypted %d existing file(s)", n)
+		if err != nil {
+			log.Fatalf("Stopped: %v", err)
+		}
+		return
+	}
 
 	// Start a background goroutine to clean up expired tokens
 	go cleanupExpiredTokens()
@@ -95,6 +167,19 @@ func main() {
 	r.Get("/files/preview/{token}", handleDownload(config, "inline"))
 	r.Get("/files/preview/{token}/*", handleDownload(config, "inline"))
 
+	certFile, keyFile := os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE")
+	if certFile != "" || keyFile != "" {
+		if certFile == "" || keyFile == "" {
+			log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
+		}
+		log.Printf("Starting file server with TLS on port %s", config.ServerPort)
+		srv := &http.Server{Addr: ":" + config.ServerPort, Handler: r, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+		return
+	}
+	log.Printf("WARNING: file server is listening without TLS (set TLS_CERT_FILE and TLS_KEY_FILE)")
 	log.Printf("Starting file server on port %s", config.ServerPort)
 	if err := http.ListenAndServe(":"+config.ServerPort, r); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
@@ -102,10 +187,22 @@ func main() {
 }
 
 func loadConfig() Config {
+	maxUpload := defaultMaxUploadBytes
+	if raw := strings.TrimSpace(getEnv("MAX_UPLOAD_BYTES", "")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			log.Fatalf("Invalid MAX_UPLOAD_BYTES %q: %v", raw, err)
+		}
+		maxUpload = parsed
+	}
+	mode := strings.ToLower(strings.TrimSpace(getEnv("STORAGE_ENCRYPTION", "required")))
 	return Config{
+		EncryptionMode:   mode,
+		EncryptionKey:    getEnv("STORAGE_ENCRYPTION_KEY", ""),
 		StoragePath:      getEnv("STORAGE_PATH", "/storage"),
 		InternalAPIToken: getEnv("INTERNAL_API_TOKEN", ""),
 		ServerPort:       getEnv("PORT", "8080"),
+		MaxUploadBytes:   maxUpload,
 	}
 }
 
@@ -218,8 +315,25 @@ func handleUpload(config Config) http.HandlerFunc {
 			}
 		}()
 
-		_, err = io.Copy(outFile, r.Body)
+		body := r.Body
+		if config.MaxUploadBytes > 0 {
+			body = http.MaxBytesReader(w, r.Body, config.MaxUploadBytes)
+		}
+		if config.Cipher != nil {
+			sealer := config.Cipher.NewWriter(outFile)
+			_, err = io.Copy(sealer, body)
+			if err == nil {
+				err = sealer.Close()
+			}
+		} else {
+			_, err = io.Copy(outFile, body)
+		}
 		if err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				http.Error(w, "Upload exceeds the maximum allowed size", http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Printf("Error writing file %s: %v", tmpPath, err)
 			http.Error(w, "Failed to write file content", http.StatusInternalServerError)
 			return
@@ -287,6 +401,16 @@ func deleteFileHandler(config Config) http.HandlerFunc {
 			return
 		}
 
+		if reqBody.Secure {
+			// Fail closed: if the data cannot be overwritten the file is kept, so the caller keeps its
+			// record and retries, instead of believing the data is gone.
+			if oerr := overwriteTree(cleanPath); oerr != nil {
+				log.Printf("Error overwriting %s before delete: %v", cleanPath, oerr)
+				http.Error(w, "Could not securely delete file", http.StatusInternalServerError)
+				return
+			}
+		}
+
 		if fileInfo.IsDir() {
 			baseName := filepath.Base(cleanPath)
 			if strings.HasSuffix(baseName, "_hls") {
@@ -311,6 +435,64 @@ func deleteFileHandler(config Config) http.HandlerFunc {
 
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// overwriteFile replaces the contents of a regular file, in place, with one pass of random bytes and
+// flushes it to disk. This is the "Clear" technique of NIST SP 800-88 Rev. 1 for logical media.
+// It does not reach copies the storage layer keeps elsewhere (SSD wear levelling, copy-on-write or
+// journalling file systems, snapshots, backups); see docs/fork/data-retention.md.
+func overwriteFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil // never follow symbolic links or touch devices
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	buf := make([]byte, 1<<20)
+	remaining := info.Size()
+	for remaining > 0 {
+		n := int64(len(buf))
+		if remaining < n {
+			n = remaining
+		}
+		if _, err := rand.Read(buf[:n]); err != nil {
+			return err
+		}
+		if _, err := f.Write(buf[:n]); err != nil {
+			return err
+		}
+		remaining -= n
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return f.Truncate(0)
+}
+
+// overwriteTree overwrites a file, or every regular file below a directory.
+func overwriteTree(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return overwriteFile(path)
+	}
+	return filepath.Walk(path, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if fi.Mode().IsRegular() {
+			return overwriteFile(p)
+		}
+		return nil
+	})
 }
 
 func getFileInfoHandler(config Config) http.HandlerFunc {
@@ -365,7 +547,7 @@ func getFileInfoHandler(config Config) http.HandlerFunc {
 
 		json.NewEncoder(w).Encode(FileInfoResponse{
 			Exists: true,
-			Size:   info.Size(),
+			Size:   config.Cipher.storedPlainSize(cleanPath, info.Size()),
 		})
 	}
 }
@@ -545,6 +727,7 @@ func handleDownload(config Config, disposition string) http.HandlerFunc {
 			effectiveDisposition = "attachment"
 		}
 
+		setNoStoreHeaders(w)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if effectiveDisposition == "inline" {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
@@ -553,7 +736,11 @@ func handleDownload(config Config, disposition string) http.HandlerFunc {
 		safeName := url.PathEscape(downloadName)
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf(`%s; filename*=UTF-8''%s`, effectiveDisposition, safeName))
-		http.ServeFile(w, r, filePath)
+		if config.Cipher == nil {
+			http.ServeFile(w, r, filePath)
+			return
+		}
+		serveDecrypted(w, r, config.Cipher, filePath)
 	}
 }
 
@@ -581,7 +768,8 @@ if token == "" {
 	return
 }
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "Bearer "+token {
+			expected := "Bearer " + token
+			if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expected)) != 1 {
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
@@ -603,4 +791,31 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// setNoStoreHeaders keeps a document out of browser and proxy caches, and out of the Referer of anything it
+// links to. (Last-Modified may still be sent by the standard library; with no-store it cannot be used to cache.)
+func setNoStoreHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store, private, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+}
+
+// serveDecrypted answers a download from a stored file, decrypting it on the fly. Range requests work.
+func serveDecrypted(w http.ResponseWriter, r *http.Request, c *FileCipher, path string) {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	rs, _, err := c.Open(path)
+	if err != nil {
+		log.Printf("Could not open %s: %v", path, err)
+		http.Error(w, "Could not read file", http.StatusInternalServerError)
+		return
+	}
+	defer rs.Close()
+	http.ServeContent(w, r, filepath.Base(path), st.ModTime(), rs)
 }

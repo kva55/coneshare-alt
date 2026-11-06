@@ -1,8 +1,8 @@
-import hashlib
 import logging
 import math
 import os
 import secrets
+from security.throttling import ViewerThrottle
 from datetime import timedelta
 from io import BytesIO
 from urllib.parse import quote, urljoin
@@ -14,12 +14,11 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import transaction
-from django.http import HttpResponse, HttpResponseRedirect, StreamingHttpResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.translation import gettext as _, override as translation_override
-from django.utils.http import quote_etag
 from django.utils.text import get_valid_filename
 from rest_framework import mixins, permissions, serializers, status, viewsets
 from rest_framework.decorators import action
@@ -33,6 +32,7 @@ from drf_spectacular.utils import extend_schema, inline_serializer
 
 from backend.utils import get_client_ip
 from core.i18n_utils import resolve_email_language
+from core.fetch_guard import is_script_fetch, no_store_headers, sniff_image_content_type
 from core.services import get_dynamic_setting, get_max_watermark_file_size_mb
 from datarooms.models import (DataroomDocument, DataroomFolder, DataroomItemOrder)
 from datarooms.serializers import (PublicDataroomDocumentSerializer,
@@ -46,6 +46,12 @@ from core.pagination import StandardResultsSetPagination
 from documents.renderers import get_renderer
 from documents.views import prepare_pages_data
 from automations.tasks import dispatch_automation_event_task
+from .access import requires_allowlist, session_satisfies_allowlist
+from .policy import effective_link
+from .events import EventType, record_event_once
+from .integrity import automation_marker
+from .protected_pages import (MAX_TILES_PER_REQUEST, blur_page, cached_image, cached_source, focus_lease_ok, render_tiles, set_focus,
+                              tile_size)
 from .models import (DataroomVisit, EmailVerificationToken, PreviewSession,
                      QnAMessage, QnAThread, ShareLink,
                      ShareLinkDataroomSetting, ShareLinkTemplate, Viewer,
@@ -268,6 +274,13 @@ class LinkExpired(APIException):
     default_code = "link_expired"
 
 
+def _capture_actions() -> dict:
+    """What the viewer does when it detects an attempt (set in Admin > Security)."""
+    from security.capture import effective_actions
+    from security.services import snapshot
+    return effective_actions(snapshot()['capture_actions'])
+
+
 def _get_active_share_link(slug: str) -> ShareLink:
     """
     Retrieves an active ShareLink by its slug, or raises an appropriate
@@ -286,7 +299,7 @@ def _get_active_share_link(slug: str) -> ShareLink:
     if link.expires_at and link.expires_at < timezone.now():
         raise LinkExpired()
 
-    return link
+    return effective_link(link)   # the target's access policy applied (read-only copy)
 
 
 def _is_nda_accepted(link: ShareLink, request, auth_status) -> bool:
@@ -426,9 +439,13 @@ def _build_share_link_public_meta(link: ShareLink, request=None) -> dict:
         "logo_mode": logo_mode,
         "resolved_brand_logo_url": resolved_brand_logo_url,
         "has_password": bool(link.password),
+        "blur_when_unfocused": bool(link.blur_when_unfocused),
+        "capture_actions": _capture_actions(),
+        "restricted_viewing_pane": bool(link.restricted_viewing_pane),
         "requires_email": bool(link.requires_email),
         "requires_email_verification": bool(link.requires_email_verification),
-        "is_restricted": bool(link.password or link.requires_email or link.requires_email_verification),
+        "requires_allowlist": requires_allowlist(link),
+        "is_restricted": bool(requires_allowlist(link) or link.password or link.requires_email or link.requires_email_verification),
     }
 
 
@@ -538,6 +555,11 @@ def _verify_share_link_session_authorization(
     if link.expires_at and link.expires_at < timezone.now():
         return Response({"message": "This link has expired."}, status=status.HTTP_410_GONE), None
 
+    from security.capture import locked_until
+    if locked_until(request, f"link:{link.id}"):
+        return Response({"message": "Viewing was ended because of an action the owner has set to end it. Try again later.",
+                         "code": "capture_lockout"}, status=status.HTTP_423_LOCKED), None
+
     authorized_links = request.session.get('authorized_share_links', {})
     auth_status = authorized_links.get(str(link.id))
 
@@ -548,6 +570,14 @@ def _verify_share_link_session_authorization(
         ), None
 
     auth_status_dict = auth_status or {}
+
+    if requires_allowlist(link) and not session_satisfies_allowlist(link, auth_status_dict):
+        # Someone opened a restricted link without access: log it (once per session / 5 minutes).
+        record_event_once(request, link, EventType.ACCESS_ATTEMPT)
+        return Response(
+            {"message": "Access to this link is restricted. Verify your email to continue.", "protectionType": "allowlist"},
+            status=status.HTTP_401_UNAUTHORIZED
+        ), None
 
     if link.requires_email and not auth_status_dict.get('email_verified'):
         return Response(
@@ -583,6 +613,11 @@ def _check_sequential_gate_prerequisites(link: ShareLink, auth_status: dict, tar
     Returns an error Response or None.
     """
     if target_gate in ('password', 'nda'):
+        if requires_allowlist(link) and not session_satisfies_allowlist(link, auth_status):
+            return Response(
+                {"message": "Access to this link is restricted. Verify your email to continue.", "protectionType": "allowlist"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
         if link.requires_email and not auth_status.get('email_verified'):
             return Response(
                 {"message": "This link requires an email address to view.", "protectionType": "email"},
@@ -610,6 +645,8 @@ def _get_authorized_qna_view_session(request, link: ShareLink, view_session_id: 
         raise PermissionDenied("This link has expired.")
 
     auth_status = request.session.get('authorized_share_links', {}).get(str(link.id), {})
+    if requires_allowlist(link) and not session_satisfies_allowlist(link, auth_status):
+        raise PermissionDenied("Access to this link is restricted.")
     if link.requires_email and not auth_status.get('email_verified'):
         raise PermissionDenied("Email verification is required before using Q&A.")
     if link.password and not auth_status.get('password_verified'):
@@ -810,6 +847,7 @@ class ShareLinkViewDataView(APIView):
     This view includes all necessary security checks.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     @extend_schema(
         responses={200: dict, 401: dict, 403: dict, 404: dict, 410: dict},
@@ -1104,9 +1142,13 @@ class ShareLinkViewDataView(APIView):
                     "resolved_watermark_text": resolved_watermark_text,
                     "require_nda": link.require_nda,
                     "has_password": bool(link.password),
+                    "blur_when_unfocused": bool(link.blur_when_unfocused),
+                    "capture_actions": _capture_actions(),
+                    "restricted_viewing_pane": bool(link.restricted_viewing_pane),
                     "requires_email": bool(link.requires_email),
                     "requires_email_verification": bool(link.requires_email_verification),
-                    "is_restricted": bool(link.password or link.requires_email or link.requires_email_verification),
+                    "requires_allowlist": requires_allowlist(link),
+                    "is_restricted": bool(requires_allowlist(link) or link.password or link.requires_email or link.requires_email_verification),
                 }
             }
             if dataroom_context:
@@ -1329,9 +1371,13 @@ class ShareLinkViewDataView(APIView):
                     'resolved_watermark_text': resolved_watermark_text,
                     'require_nda': link.require_nda,
                     'has_password': bool(link.password),
+                    'blur_when_unfocused': bool(link.blur_when_unfocused),
+                    'capture_actions': _capture_actions(),
+                    'restricted_viewing_pane': bool(link.restricted_viewing_pane),
                     'requires_email': bool(link.requires_email),
                     'requires_email_verification': bool(link.requires_email_verification),
-                    'is_restricted': bool(link.password or link.requires_email or link.requires_email_verification),
+                    'requires_allowlist': requires_allowlist(link),
+                    'is_restricted': bool(requires_allowlist(link) or link.password or link.requires_email or link.requires_email_verification),
                 }
             }
             return Response(response_data, status=status.HTTP_200_OK)
@@ -1363,6 +1409,7 @@ class PerSlugScopedRateThrottle(ScopedRateThrottle):
 class ShareLinkPublicMetaView(APIView):
     """Provides safe public metadata for password/email pre-access screens."""
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     @extend_schema(responses={200: dict, 404: dict, 410: dict})
     def get(self, request, slug, *args, **kwargs):
@@ -1379,6 +1426,7 @@ class ShareLinkPublicMetaView(APIView):
 @extend_schema(tags=['sharelinks'])
 class ShareLinkQnAThreadListCreateView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     def _get_context_from_request(self, link, request):
         return _resolve_qna_context_for_link(
@@ -1488,6 +1536,7 @@ class ShareLinkQnAThreadListCreateView(APIView):
 @extend_schema(tags=['sharelinks'])
 class ShareLinkQnASummaryView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     @extend_schema(
         responses={
@@ -1536,6 +1585,7 @@ class ShareLinkQnASummaryView(APIView):
 @extend_schema(tags=['sharelinks'])
 class ShareLinkQnAMessageListCreateView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     def _get_thread_for_viewer(self, request, slug, thread_id, view_session_id):
         link = _get_active_share_link(slug)
@@ -1851,6 +1901,7 @@ class ShareLinkAcceptNDAView(APIView):
     Accepts the NDA for a share link and authorizes the session.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     @extend_schema(
         request=inline_serializer(
@@ -2166,13 +2217,15 @@ class ShareLinkConfirmAccessView(APIView):
             return Response({"message": "The verification link has already been used or is invalid."}, status=status.HTTP_400_BAD_REQUEST)
 
 
-def _calculate_watermark_grid_params(page_width, page_height, rotated_tile_width, rotated_tile_height):
+def _calculate_watermark_grid_params(page_width, page_height, rotated_tile_width, rotated_tile_height, dense=False):
     """
     Calculates spacing and drawing range for a tiled watermark grid.
     This logic is shared between Pillow (image) and ReportLab (PDF) generation.
+    ``dense`` packs the marks roughly four times closer together (restricted viewing pane).
     """
-    x_spacing = int(rotated_tile_width + page_width / 5)
-    y_spacing = int(rotated_tile_height + page_height / 5)
+    divisor = 18 if dense else 5
+    x_spacing = int(rotated_tile_width + page_width / divisor)
+    y_spacing = int(rotated_tile_height + page_height / divisor)
 
     x_range = range(-int(rotated_tile_width), int(page_width) + x_spacing, x_spacing)
     y_range = range(-int(rotated_tile_height), int(page_height) + y_spacing, y_spacing)
@@ -2193,190 +2246,254 @@ def _render_watermark_text(template_string: str, request, viewer_email: str = ''
     return rendered_text
 
 
-@extend_schema(tags=['sharelinks'])
-class ShareLinkPageView(APIView):
+class _PageContext:
+    """What a page request resolved to: the link, the page's source bytes and how to draw it."""
+    def __init__(self, link, auth_status, source_bytes, watermark_enabled):
+        self.link = link
+        self.auth_status = auth_status
+        self.source_bytes = source_bytes
+        # A restricted-pane link is always watermarked, densely, on the page underneath as well
+        # as on the blurred version: the mark is part of the pixels the server hands out.
+        self.dense = bool(link.restricted_viewing_pane)
+        self.watermark_enabled = bool(watermark_enabled or self.dense)
+
+
+def _note_share_finding(request, slug, event_type, metadata, link=None, email=''):
+    """Record how a page was requested (once a minute per viewer session); never changes the response."""
+    from .integrity import monitoring_on
+    try:
+        if not monitoring_on():
+            return
+        link = link or _get_active_share_link(slug)
+        record_event_once(request, link, event_type, window_seconds=60, email=email, metadata=metadata)
+    except Exception:  # a finding must never break page delivery
+        logger.debug("Could not record %s", event_type, exc_info=True)
+
+
+def _load_share_page(request, slug, page_number):
     """
-    Serves a single, non-watermarked page image for a document accessed
-    via a public share link. It performs all necessary security checks
-    for each page request and serves the file from storage.
+    Resolve a share-link page request: script-only, every gate re-checked, focus lease honoured,
+    source bytes fetched from the file server. Returns (_PageContext, None) or (None, Response).
+    """
+    if not is_script_fetch(request):
+        _note_share_finding(request, slug, EventType.NON_BROWSER_REQUEST, {'agent': (request.META.get('HTTP_USER_AGENT', '') or '')[:80]})
+        return None, Response({"message": "Pages can only be loaded by the viewer."}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        link = _get_active_share_link(slug)
+    except NotFound as e:
+        return None, Response({"message": e.detail}, status=status.HTTP_404_NOT_FOUND)
+    except LinkExpired as e:
+        return None, Response({"message": e.detail}, status=status.HTTP_410_GONE)
+
+    auth_error, auth_status = _verify_share_link_session_authorization(link, request, nda_status_code=status.HTTP_403_FORBIDDEN)
+    if auth_error:
+        return None, auth_error
+    marker = automation_marker(request)
+    if marker:
+        _note_share_finding(request, slug, EventType.AUTOMATION_DETECTED, {'via': 'user_agent', 'marker': marker},
+                            link=link, email=auth_status.get('viewer_email', ''))
+
+    if not focus_lease_ok(request, link):
+        return None, Response({"message": "The viewer is not in focus."}, status=status.HTTP_423_LOCKED)
+
+    watermark_enabled = False
+    if link.dataroom:
+        dataroom_document_id = request.query_params.get('dataroom_document_id')
+        if not dataroom_document_id:
+            return None, Response({"message": "dataroom_document_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            # Security check: the document must belong to this dataroom and be visible
+            # according to the link's settings.
+            setting = _resolve_dataroom_document_setting(link, dataroom_document_id, visible_only=True)
+            document = setting.dataroom_document.document
+            watermark_enabled = setting.enable_watermark
+        except serializers.ValidationError as e:
+            return None, Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except ShareLinkDataroomSetting.DoesNotExist:
+            return None, Response({"message": "You do not have permission to view this document."}, status=status.HTTP_403_FORBIDDEN)
+    elif link.document:
+        document = link.document
+        watermark_enabled = link.enable_watermark
+    else:
+        return None, Response({"message": "Invalid link target."}, status=status.HTTP_400_BAD_REQUEST)
+
+    primary_version = document.versions.filter(is_primary=True).first()
+    if not primary_version:
+        return None, Response({"message": "Document version not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    source_image_key = get_renderer(primary_version).get_page_storage_key(primary_version, page_number)
+    if not source_image_key:
+        return None, Response({"message": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if (watermark_enabled or link.restricted_viewing_pane) and not Image:
+        logger.error("Pillow is not installed. Watermarking/blurring is not available.")
+        return None, Response(
+            {"detail": "Image processing is currently unavailable."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        def _fetch_page():
+            response = requests.get(fileserver_client.generate_download_url(source_image_key, is_internal=True), timeout=30)
+            response.raise_for_status()
+            return response.content
+        source_content = cached_source(source_image_key, _fetch_page)
+    except (APIException, requests.RequestException) as e:
+        logger.error("Failed to load page image from the file server: %s", type(e).__name__)
+        return None, Response(
+            {"detail": "Could not retrieve file. Please try again later."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    ctx = _PageContext(link, auth_status, source_content, watermark_enabled)
+    ctx.cache_scope = (str(link.id), str(document.id), page_number)
+    return ctx, None
+
+
+def _render_page_image(ctx, request, blurred=False):
+    """
+    The page as an RGBA image: optionally blurred first, then the viewer's watermark burned in
+    (after the blur, so the mark stays sharp). The clear version carries the same watermark.
+    """
+    image = Image.open(BytesIO(ctx.source_bytes)).convert("RGBA")
+    if blurred:
+        image = blur_page(image)
+    if ctx.watermark_enabled:
+        text = _render_watermark_text(
+            get_effective_watermark_text(ctx.link), request, viewer_email=ctx.auth_status.get('viewer_email', '')
+        )
+        image = _apply_watermark_to_image(image, text, dense=ctx.dense)
+    return image
+
+
+@extend_schema(tags=['sharelinks'])
+class SharePageImageView(APIView):
+    """
+    Delivers one page of a shared document to the viewer.
+
+    This is a POST endpoint that only the viewer's JavaScript can use (see
+    core/fetch_guard.py): the bytes are streamed through the application (never a
+    redirect to a file URL), are never cached, and are painted into a canvas by the
+    client. Watermarks are burned into the pixels on the server. When the link has the
+    restricted viewing pane the page is blurred *on the server* and the clear page is never
+    sent (see sharelinks/protected_pages.py); the viewer asks for small clear patches around
+    the cursor from the spotlight endpoint instead. Every gate (password, email, NDA, expiry,
+    dataroom item visibility, focus lease) is re-checked on each request.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     @extend_schema(
-        responses={302: None, 400: dict, 401: dict, 403: dict, 404: dict, 410: dict, 503: dict},
+        request=None,
+        responses={200: None, 400: dict, 401: dict, 403: dict, 404: dict, 410: dict, 423: dict, 500: dict, 503: dict},
     )
-    def get(self, request, slug, page_number, *args, **kwargs):
+    def post(self, request, slug, page_number, *args, **kwargs):
+        ctx, error = _load_share_page(request, slug, page_number)
+        if error:
+            return error
+
+        data = ctx.source_bytes
+        content_type = sniff_image_content_type(data)
+        if ctx.watermark_enabled:
+            try:
+                image = _render_page_image(ctx, request, blurred=ctx.link.restricted_viewing_pane)
+                buffer = BytesIO()
+                image.convert("RGB").save(buffer, format="JPEG", quality=WATERMARK_JPEG_QUALITY)
+                data = buffer.getvalue()
+                content_type = "image/jpeg"
+            except Exception as e:
+                logger.error("Failed to process page image: %s", type(e).__name__)
+                return Response(
+                    {"message": "An error occurred while generating the page."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        response = HttpResponse(data, content_type=content_type)
+        response["Content-Length"] = str(len(data))
+        return no_store_headers(response)
+
+
+@extend_schema(tags=['sharelinks'])
+class SharePageTilesView(APIView):
+    """
+    Clear (watermarked) tiles of one page, for links with the restricted viewing pane. The page
+    itself is only ever delivered blurred; this is the only way clear pixels leave the server,
+    a few tiles at a time, cut on a fixed grid so the viewer never needs to ask twice for a tile
+    it already holds. Rate limited per session (tiles per minute) and logged.
+
+    Body: ``{"tiles": [[column, row], ...]}`` (at most 16). Response: ``{"tile_size": n,
+    "tiles": [{c, r, x, y, w, h, data}]}`` with ``data`` a base64 JPEG.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
+
+    @extend_schema(request=dict, responses={200: dict, 400: dict, 403: dict, 404: dict, 423: dict, 429: dict})
+    def post(self, request, slug, page_number, *args, **kwargs):
+        ctx, error = _load_share_page(request, slug, page_number)
+        if error:
+            return error
+        if not ctx.link.restricted_viewing_pane:
+            return Response({"message": "Not available."}, status=status.HTTP_404_NOT_FOUND)
+
+        raw = request.data.get('tiles')
+        if not isinstance(raw, list) or not raw or len(raw) > MAX_TILES_PER_REQUEST:
+            return Response({"message": f"'tiles' must list 1 to {MAX_TILES_PER_REQUEST} cells."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            cells = {(int(c), int(r)) for c, r in raw}
+        except (TypeError, ValueError):
+            return Response({"message": "Each tile is [column, row]."}, status=status.HTTP_400_BAD_REQUEST)
+
+        bucket = f"tiles:{request.session.session_key}:{ctx.link.id}"
+        cache.add(bucket, 0, 60)
+        try:
+            count = cache.incr(bucket, len(cells))
+        except ValueError:
+            count = len(cells)
+        if count > settings.SPOTLIGHT_TILES_PER_MINUTE:
+            record_event_once(request, ctx.link, EventType.SPOTLIGHT_LIMIT, window_seconds=60,
+                              email=ctx.auth_status.get('viewer_email', ''))
+            return Response({"message": "Too many requests."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        try:
+            text = _render_watermark_text(get_effective_watermark_text(ctx.link), request,
+                                          viewer_email=ctx.auth_status.get('viewer_email', '')) if ctx.watermark_enabled else ''
+            image = cached_image(('link',) + ctx.cache_scope + (text, ctx.dense),
+                                 lambda: _render_page_image(ctx, request, blurred=False))
+            tiles = render_tiles(image, sorted(cells))
+            size = tile_size(image.width)
+        except Exception as e:
+            logger.error("Failed to build tiles: %s", type(e).__name__)
+            return Response({"message": "An error occurred while generating the page."},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return no_store_headers(JsonResponse({"tile_size": size, "tiles": tiles}))
+
+
+@extend_schema(tags=['sharelinks'])
+class ShareLinkFocusView(APIView):
+    """The viewer reports whether its page is in focus (the focus lease; see protected_pages)."""
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
+
+    @extend_schema(request=dict, responses={204: None, 400: dict, 401: dict, 403: dict, 404: dict, 410: dict})
+    def post(self, request, slug):
         try:
             link = _get_active_share_link(slug)
         except NotFound as e:
             return Response({"message": e.detail}, status=status.HTTP_404_NOT_FOUND)
         except LinkExpired as e:
             return Response({"message": e.detail}, status=status.HTTP_410_GONE)
-
         auth_error, _ = _verify_share_link_session_authorization(link, request, nda_status_code=status.HTTP_403_FORBIDDEN)
         if auth_error:
             return auth_error
-
-        document = None
-        watermark_enabled = False
-        if link.dataroom:
-            dataroom_document_id = request.query_params.get('dataroom_document_id')
-            if not dataroom_document_id:
-                return Response({"message": "dataroom_document_id is required."}, status=status.HTTP_400_BAD_REQUEST)
-            try:
-                setting = _resolve_dataroom_document_setting(link, dataroom_document_id, visible_only=True)
-                document = setting.dataroom_document.document
-                watermark_enabled = setting.enable_watermark
-            except serializers.ValidationError as e:
-                return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
-            except ShareLinkDataroomSetting.DoesNotExist:
-                return Response({"message": "You do not have permission to view this document."}, status=status.HTTP_403_FORBIDDEN)
-        elif link.document:
-            document = link.document
-            watermark_enabled = link.enable_watermark
-        else:
-            return Response({"message": "Invalid link target."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if watermark_enabled:
-            return Response(
-                {"message": "Watermarking is enabled for this file. Unwatermarked pages cannot be served directly."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        primary_version = document.versions.filter(is_primary=True).first()
-        if not primary_version:
-            return Response({"message": "Document version not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        renderer = get_renderer(primary_version)
-        source_image_key = renderer.get_page_storage_key(primary_version, page_number)
-        if not source_image_key:
-            return Response({"message": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-            download_url = fileserver_client.generate_download_url(source_image_key, is_internal=False)
-            return HttpResponseRedirect(download_url)
-        except APIException as e:
-            logger.error(f"Failed to get download URL from file server for {source_image_key}: {e}")
-            return Response(
-                {"detail": "Could not retrieve file. Please try again later."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+        focused = request.data.get('focused')
+        if not isinstance(focused, bool):
+            return Response({"message": "'focused' must be true or false."}, status=status.HTTP_400_BAD_REQUEST)
+        set_focus(request, link, focused)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-@extend_schema(tags=['sharelinks'])
-class WatermarkedPageRenderView(APIView):
-    """
-    Dynamically renders a watermarked image for a document page.
-    This is a public endpoint, but it checks for an active share link.
-    """
-    permission_classes = [permissions.AllowAny]
-
-    @extend_schema(
-        responses={200: None, 304: None, 400: dict, 401: dict, 403: dict, 404: dict, 410: dict, 500: dict, 503: dict},
-    )
-    def get(self, request, slug, page_number, *args, **kwargs):
-        if not Image:
-            logger.error("Pillow is not installed. Watermarking is not available.")
-            return Response(
-                {"detail": "Watermarking service is currently unavailable."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-
-        try:
-            link = _get_active_share_link(slug)
-        except NotFound as e:
-            return Response({"message": e.detail}, status=status.HTTP_404_NOT_FOUND)
-        except LinkExpired as e:
-            return Response({"message": e.detail}, status=status.HTTP_410_GONE)
-
-        auth_error, auth_status = _verify_share_link_session_authorization(link, request, nda_status_code=status.HTTP_403_FORBIDDEN)
-        if auth_error:
-            return auth_error
-
-        document = None
-        watermark_enabled_for_item = False
-        if link.dataroom:
-            dataroom_document_id = request.query_params.get('dataroom_document_id')
-            if not dataroom_document_id:
-                return Response({"message": "dataroom_document_id is required."}, status=status.HTTP_400_BAD_REQUEST)
-            try:
-                # Security check: ensure the requested document is part of this dataroom
-                # and is visible according to the link's settings.
-                setting = _resolve_dataroom_document_setting(link, dataroom_document_id, visible_only=True)
-                document = setting.dataroom_document.document
-                watermark_enabled_for_item = setting.enable_watermark
-            except serializers.ValidationError as e:
-                return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
-            except ShareLinkDataroomSetting.DoesNotExist:
-                return Response({"message": "You do not have permission to view this document."}, status=status.HTTP_403_FORBIDDEN)
-        elif link.document:
-            document = link.document
-            watermark_enabled_for_item = link.enable_watermark
-        else:
-            return Response({"message": "Invalid link target."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if not watermark_enabled_for_item:
-            return Response({"message": "Watermarking is not enabled for this file."}, status=status.HTTP_400_BAD_REQUEST)
-
-        primary_version = document.versions.filter(is_primary=True).first()
-
-        if not primary_version:
-            return Response({"message": "Document version not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        # Get source image
-        renderer = get_renderer(primary_version)
-        source_image_key = renderer.get_page_storage_key(primary_version, page_number)
-        if not source_image_key:
-            return Response({"message": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        viewer_email = auth_status.get('viewer_email', '')
-        effective_watermark_text = get_effective_watermark_text(link)
-
-        # Generate an ETag based on factors that would change the output image.
-        ip_address = get_client_ip(request) or ''
-        etag_source = f"{source_image_key}-{link.updated_at.isoformat()}-{effective_watermark_text}-{ip_address}-{viewer_email}"
-        etag = hashlib.md5(etag_source.encode()).hexdigest()
-
-        # Check against the If-None-Match header from the client.
-        if_none_match = request.META.get('HTTP_IF_NONE_MATCH')
-        if if_none_match and quote_etag(etag) == if_none_match:
-            return HttpResponse(status=304)
-
-        # Render watermark
-        try:
-            download_url = fileserver_client.generate_download_url(source_image_key, is_internal=True)
-            response = requests.get(download_url)
-            response.raise_for_status()
-            image = Image.open(BytesIO(response.content)).convert("RGBA")
-
-            watermark_text = _render_watermark_text(effective_watermark_text, request, viewer_email=viewer_email)
-            
-            watermarked_image = _apply_watermark_to_image(image, watermark_text)
-
-            # Save to buffer and return as response
-            buffer = BytesIO()
-            watermarked_image.convert("RGB").save(buffer, format="JPEG", quality=WATERMARK_JPEG_QUALITY)
-            buffer.seek(0)
-
-            response = HttpResponse(buffer.getvalue(), content_type="image/jpeg")
-            response["Content-Length"] = str(len(buffer.getvalue()))
-            response["Content-Disposition"] = f'inline; filename="{document.id}_page_{page_number}.jpg"'
-
-            # Set caching headers with the new ETag
-            response['ETag'] = quote_etag(etag)
-            response['Cache-Control'] = 'public, max-age=60, must-revalidate'
-
-            return response
-
-        except Exception as e:
-            logger.error("Failed to apply watermark for page: %s", type(e).__name__)
-            return Response(
-                {"message": "An error occurred while generating the watermark."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-def _apply_watermark_to_image(image: Image, watermark_text: str) -> Image:
+def _apply_watermark_to_image(image: Image, watermark_text: str, dense: bool = False) -> Image:
     """
     Applies a tiled, rotated watermark to a given Pillow Image object.
     """
@@ -2400,7 +2517,8 @@ def _apply_watermark_to_image(image: Image, watermark_text: str) -> Image:
 
     text_tile = Image.new('RGBA', (text_width, text_height), (255, 255, 255, 0))
     text_tile_draw = ImageDraw.Draw(text_tile)
-    text_tile_draw.text((-text_bbox[0], -text_bbox[1]), watermark_text, font=font, fill=WATERMARK_FILL_COLOR)
+    fill = (0, 0, 0, 95) if dense else WATERMARK_FILL_COLOR
+    text_tile_draw.text((-text_bbox[0], -text_bbox[1]), watermark_text, font=font, fill=fill)
 
     rotated_tile = text_tile.rotate(WATERMARK_ROTATION_ANGLE, resample=Image.BICUBIC, expand=True)
 
@@ -2408,7 +2526,8 @@ def _apply_watermark_to_image(image: Image, watermark_text: str) -> Image:
         page_width=image.width,
         page_height=image.height,
         rotated_tile_width=rotated_tile.width,
-        rotated_tile_height=rotated_tile.height
+        rotated_tile_height=rotated_tile.height,
+        dense=dense,
     )
 
     for x in grid_params['x_range']:
@@ -2587,6 +2706,7 @@ class ShareLinkFileDownloadView(APIView):
     serves the original file.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
 
     @extend_schema(
         responses={200: None, 302: None, 400: dict, 401: dict, 403: dict, 404: dict, 410: dict, 500: dict, 503: dict},
@@ -3375,6 +3495,7 @@ class RecordPageView(APIView):
     Receives and records granular page view tracking data.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
     serializer_class = PageViewRecordSerializer
 
     class RecordPageResponseSerializer(serializers.Serializer):
@@ -3442,6 +3563,7 @@ class RecordLinkClickView(APIView):
     Receives and records link click tracking events.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ViewerThrottle]   # viewing makes many small requests: its own, visible limit
     serializer_class = LinkClickRecordSerializer
 
     class RecordLinkClickResponseSerializer(serializers.Serializer):

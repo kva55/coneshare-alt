@@ -1,120 +1,40 @@
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
-from django_cryptography.fields import encrypt
 
 from core.models import BaseModel, Organization, User
 
+from .crypto import decrypt_secret, derive_webhook_secret, encrypt_secret
 
-class AutomationDestination(BaseModel):
-    class DestinationType(models.TextChoices):
-        SLACK = 'slack', 'Slack'
-        DISCORD = 'discord', 'Discord'
-        WECHAT = 'wechat', 'WeChat Work'
-        FEISHU = 'feishu', 'FeiShu'
-        WEBHOOK = 'webhook', 'Webhook'
-        EMAIL = 'email', 'Email'
 
-    class HttpMethod(models.TextChoices):
-        POST = 'POST', 'POST'
-        PUT = 'PUT', 'PUT'
-
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='automation_destinations')
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='automation_destinations_created')
+class WebhookEndpoint(BaseModel):
+    """A generic HTTPS endpoint that receives signed JSON for the events it subscribes to."""
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='webhook_endpoints')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='webhook_endpoints_created')
     name = models.CharField(max_length=255)
-    destination_type = models.CharField(max_length=20, choices=DestinationType.choices, default=DestinationType.WEBHOOK)
-    endpoint_url = models.URLField(max_length=2048, null=True, blank=True)
-    http_method = models.CharField(max_length=10, choices=HttpMethod.choices, default=HttpMethod.POST)
-    headers = models.JSONField(default=dict, blank=True)
-    signing_secret = encrypt(models.CharField(max_length=255, null=True, blank=True))
+    url = models.URLField(max_length=2048)
+    events = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
+    secret_version = models.PositiveIntegerField(default=1)
 
     class Meta:
         ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['organization', 'name']),
-        ]
 
-    def clean(self):
-        super().clean()
-        if self.destination_type != self.DestinationType.EMAIL and not self.endpoint_url:
-            raise ValidationError({'endpoint_url': 'This field is required for non-email destinations.'})
-        if self.destination_type == self.DestinationType.EMAIL:
-            self.endpoint_url = None
-
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        return super().save(*args, **kwargs)
+    @property
+    def signing_secret(self) -> str:
+        return derive_webhook_secret(str(self.id), self.secret_version)
 
     def __str__(self):
         return self.name
 
 
-class AutomationRule(BaseModel):
-    class ScopeType(models.TextChoices):
-        GLOBAL = 'global', 'Global'
-        SHARE_LINK = 'share_link', 'Share Link'
-        DATAROOM = 'dataroom', 'Dataroom'
-
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='automation_rules')
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='automation_rules_created')
-    name = models.CharField(max_length=255)
-    is_active = models.BooleanField(default=True)
-    scope_type = models.CharField(max_length=20, choices=ScopeType.choices, default=ScopeType.GLOBAL)
-    share_link = models.ForeignKey('sharelinks.ShareLink', on_delete=models.CASCADE, null=True, blank=True, related_name='automation_rules')
-    dataroom = models.ForeignKey('datarooms.Dataroom', on_delete=models.CASCADE, null=True, blank=True, related_name='automation_rules')
-    subscribed_events = models.JSONField(default=list, blank=True)
-    actions = models.JSONField(default=list, blank=True)
-    destinations = models.ManyToManyField(AutomationDestination, related_name='rules', blank=True)
-
-    class Meta:
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['organization', 'name']),
-        ]
-        constraints = [
-            models.CheckConstraint(
-                condition=(
-                    Q(scope_type='global', share_link__isnull=True, dataroom__isnull=True)
-                    | Q(scope_type='share_link', share_link__isnull=False, dataroom__isnull=True)
-                    | Q(scope_type='dataroom', share_link__isnull=True, dataroom__isnull=False)
-                ),
-                name='automationrule_scope_target_consistency',
-            )
-        ]
-
-    def clean(self):
-        if self.scope_type == self.ScopeType.GLOBAL and (self.share_link_id or self.dataroom_id):
-            raise ValidationError('Global scope cannot have share_link or dataroom.')
-        if self.scope_type == self.ScopeType.SHARE_LINK and not self.share_link_id:
-            raise ValidationError('Share link scope requires share_link.')
-        if self.scope_type == self.ScopeType.SHARE_LINK and self.dataroom_id:
-            raise ValidationError('Share link scope cannot have dataroom.')
-        if self.scope_type == self.ScopeType.DATAROOM and not self.dataroom_id:
-            raise ValidationError('Dataroom scope requires dataroom.')
-        if self.scope_type == self.ScopeType.DATAROOM and self.share_link_id:
-            raise ValidationError('Dataroom scope cannot have share_link.')
-
-    def save(self, *args, **kwargs):
-        self.full_clean()
-        return super().save(*args, **kwargs)
-
-    def __str__(self):
-        return self.name
-
-
-class AutomationDelivery(BaseModel):
+class WebhookDelivery(BaseModel):
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
-        PROCESSING = 'processing', 'Processing'
         SUCCESS = 'success', 'Success'
-        FAILED = 'failed', 'Failed'
-        DEAD_LETTER = 'dead_letter', 'Dead Letter'
+        FAILED = 'failed', 'Failed (will retry)'
+        DEAD_LETTER = 'dead_letter', 'Gave up'
 
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='automation_deliveries')
-    rule = models.ForeignKey(AutomationRule, on_delete=models.CASCADE, related_name='deliveries')
-    destination = models.ForeignKey(AutomationDestination, on_delete=models.CASCADE, related_name='deliveries')
+    endpoint = models.ForeignKey(WebhookEndpoint, on_delete=models.CASCADE, related_name='deliveries')
     event_type = models.CharField(max_length=100)
     payload = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
@@ -127,25 +47,63 @@ class AutomationDelivery(BaseModel):
 
     class Meta:
         ordering = ['-created_at']
-
-    def __str__(self):
-        return f'{self.event_type} -> {self.destination_id} ({self.status})'
+        indexes = [models.Index(fields=['endpoint', '-created_at'], name='wh_delivery_ep_time_idx')]
 
 
-class AutomationAssignment(BaseModel):
-    class Status(models.TextChoices):
-        OPEN = 'open', 'Open'
-        ACKNOWLEDGED = 'acknowledged', 'Acknowledged'
-        CLOSED = 'closed', 'Closed'
+class EmailSettings(BaseModel):
+    """
+    Outgoing e-mail configuration, edited in the admin UI (a single row for the deployment).
+    When ``enabled`` it overrides the EMAIL_* environment settings; otherwise those are used.
+    """
+    enabled = models.BooleanField(default=False)
+    host = models.CharField(max_length=255, blank=True)
+    port = models.PositiveIntegerField(default=587)
+    username = models.CharField(max_length=255, blank=True)
+    password_encrypted = models.TextField(blank=True)
+    use_tls = models.BooleanField(default=True)
+    use_ssl = models.BooleanField(default=False)
+    from_email = models.EmailField(blank=True)
+    # Explicit opt-in for connections without TLS (e.g. a lab server). Off: TLS is required.
+    allow_insecure = models.BooleanField(default=False)
+    # Optional inbox to confirm that mail really arrives ("receive test").
+    imap_host = models.CharField(max_length=255, blank=True)
+    imap_port = models.PositiveIntegerField(default=993)
+    imap_use_ssl = models.BooleanField(default=True)
+    imap_username = models.CharField(max_length=255, blank=True)
+    imap_password_encrypted = models.TextField(blank=True)
+    imap_test_address = models.EmailField(blank=True)
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
 
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='automation_assignments')
-    delivery = models.ForeignKey(AutomationDelivery, on_delete=models.CASCADE, related_name='assignments')
-    assigned_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='automation_assignments')
-    assigned_by_rule = models.ForeignKey(AutomationRule, on_delete=models.CASCADE, related_name='assignments')
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    def clean(self):
+        if self.use_tls and self.use_ssl:
+            raise ValidationError('Choose either STARTTLS or SSL/TLS, not both.')
+        if not 1 <= self.port <= 65535:
+            raise ValidationError({'port': 'Must be between 1 and 65535.'})
+        if not 1 <= self.imap_port <= 65535:
+            raise ValidationError({'imap_port': 'Must be between 1 and 65535.'})
+        if self.enabled and not (self.use_tls or self.use_ssl) and not self.allow_insecure:
+            raise ValidationError({'allow_insecure': 'Choose STARTTLS or SSL/TLS, or explicitly allow an unencrypted connection.'})
+        if self.imap_host and not self.imap_use_ssl and not self.allow_insecure:
+            raise ValidationError({'allow_insecure': 'The inbox check needs SSL/TLS unless you explicitly allow an unencrypted connection.'})
+        if self.enabled and not self.host:
+            raise ValidationError({'host': 'A host is required when e-mail settings are enabled.'})
+        if self.enabled and not self.from_email:
+            raise ValidationError({'from_email': 'A sender address is required when e-mail settings are enabled.'})
 
-    class Meta:
-        ordering = ['-created_at']
+    @property
+    def password(self) -> str:
+        return decrypt_secret(self.password_encrypted)
 
-    def __str__(self):
-        return f'Assignment {self.id} -> {self.assigned_user_id}'
+    def set_password(self, plain: str) -> None:
+        self.password_encrypted = encrypt_secret(plain)
+
+    @property
+    def imap_password(self) -> str:
+        return decrypt_secret(self.imap_password_encrypted)
+
+    def set_imap_password(self, plain: str) -> None:
+        self.imap_password_encrypted = encrypt_secret(plain)
+
+    @classmethod
+    def load(cls) -> 'EmailSettings':
+        return cls.objects.order_by('created_at').first() or cls()

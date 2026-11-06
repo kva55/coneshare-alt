@@ -18,7 +18,13 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
+from django.middleware.csrf import get_token
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+from core.auth_cookies import clear_auth_cookies, enforce_csrf, refresh_cookie_name, set_auth_cookies
 
 from core.models import Organization, UserGroup
 from core.permissions import IsAdmin
@@ -102,8 +108,13 @@ class UserGroupViewSet(viewsets.ModelViewSet):
 
 @extend_schema(tags=['core'])
 class CustomTokenObtainPairView(TokenObtainPairView):
+    """Log in. Tokens are set as httpOnly cookies and never returned in the body."""
     permission_classes = [permissions.AllowAny]
 
+    class LoginResponseSerializer(serializers.Serializer):
+        user = UserSerializer()
+
+    @extend_schema(responses={200: LoginResponseSerializer, 401: dict})
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
 
@@ -114,7 +125,71 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
         user_logged_in.send(sender=serializer.user.__class__, request=request, user=serializer.user)
 
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        response = Response(
+            {'user': UserSerializer(serializer.user, context={'request': request}).data},
+            status=status.HTTP_200_OK,
+        )
+        set_auth_cookies(response, serializer.validated_data['access'], serializer.validated_data.get('refresh'))
+        get_token(request)  # make sure the SPA has a csrftoken cookie for later writes
+        return response
+
+
+@extend_schema(tags=['core'])
+class CookieTokenRefreshView(APIView):
+    """Rotate the token pair using the httpOnly refresh cookie."""
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    @extend_schema(request=None, responses={200: dict, 401: dict})
+    def post(self, request):
+        enforce_csrf(request)
+        raw_refresh = request.COOKIES.get(refresh_cookie_name())
+        if not raw_refresh:
+            return Response({'detail': _('Not authenticated.')}, status=status.HTTP_401_UNAUTHORIZED)
+
+        serializer = TokenRefreshSerializer(data={'refresh': raw_refresh})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except (TokenError, InvalidToken):
+            response = Response({'detail': _('Session expired. Please log in again.')},
+                                status=status.HTTP_401_UNAUTHORIZED)
+            return clear_auth_cookies(response)
+
+        response = Response({'detail': 'refreshed'}, status=status.HTTP_200_OK)
+        set_auth_cookies(response, serializer.validated_data['access'], serializer.validated_data.get('refresh'))
+        return response
+
+
+@extend_schema(tags=['core'])
+class LogoutView(APIView):
+    """Blacklist the refresh token from the cookie and clear the auth cookies."""
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    @extend_schema(request=None, responses={204: None})
+    def post(self, request):
+        enforce_csrf(request)
+        raw_refresh = request.COOKIES.get(refresh_cookie_name())
+        if raw_refresh:
+            try:
+                RefreshToken(raw_refresh).blacklist()
+            except TokenError:
+                pass  # already expired/blacklisted: nothing to revoke
+        logout(request)
+        response = Response(status=status.HTTP_204_NO_CONTENT)
+        from .nocache import clear_site_cache
+        return clear_site_cache(clear_auth_cookies(response))
+
+
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+@extend_schema(tags=['core'])
+class AuthMeView(APIView):
+    """Return the signed-in user (used by the SPA to check its session) and set the CSRF cookie."""
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: UserSerializer, 401: dict})
+    def get(self, request):
+        return Response(UserSerializer(request.user, context={'request': request}).data)
 
 
 # @extend_schema(tags=['core'])
@@ -159,30 +234,6 @@ class SetPasswordView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@extend_schema(tags=['core'])
-class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    class LogoutRequestSerializer(serializers.Serializer):
-        refresh = serializers.CharField()
-
-    @extend_schema(
-        request=LogoutRequestSerializer,
-        responses={205: None, 400: dict},
-    )
-    def post(self, request):
-        try:
-            refresh_token = request.data["refresh"]
-            token = RefreshToken(refresh_token)
-            token_user_id = token.payload.get('user_id')
-            if not token_user_id or str(token_user_id) != str(request.user.id):
-                return Response({'detail': _('Token does not belong to the current user.')}, status=status.HTTP_400_BAD_REQUEST)
-
-            token.blacklist()
-            logout(request)
-            return Response(status=status.HTTP_205_RESET_CONTENT)
-        except Exception as e:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
 @extend_schema(tags=['core'])

@@ -152,7 +152,7 @@ class FolderSerializer(serializers.ModelSerializer):
 class DocumentPageSerializer(serializers.ModelSerializer):
     class Meta:
         model = DocumentPage
-        fields = ['id', 'page_number', 'storage_key', 'created_at']
+        fields = ['id', 'page_number', 'created_at']  # storage keys are internal
         read_only_fields = fields
 
 
@@ -197,7 +197,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             'id', 'organization', 'folder', 'name', 'description', 'status',
             'status_message', 'storage_key', 'original_storage_key', 'type', 'content_type',
             'num_pages', 'file_size', 'download_only', 'assistant_enabled', 'is_starred', 'created_by',
-            'created_by_user',
+            'created_by_user', 'delete_after',
             'created_at', 'updated_at', 'versions', 'share_links', 'uploader_info', 'share_link_view_count',
         ]
         read_only_fields = [
@@ -206,6 +206,12 @@ class DocumentSerializer(serializers.ModelSerializer):
             'num_pages', 'file_size', 'download_only',
             'created_by', 'created_by_user', 'created_at', 'updated_at',
         ]
+
+    def validate_delete_after(self, value):
+        from django.utils import timezone
+        if value is not None and value <= timezone.now():
+            raise serializers.ValidationError('Choose a time in the future.')
+        return value
 
     @extend_schema_field(serializers.DictField(allow_null=True))
     def get_created_by_user(self, instance):

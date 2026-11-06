@@ -9,7 +9,8 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 
 from core.pagination import StandardResultsSetPagination
-from sharelinks.models import ShareLink, ViewSession
+from sharelinks.access_views import ShareLinkEventSerializer, apply_event_filters
+from sharelinks.models import ShareLink, ShareLinkEvent, ViewSession
 from sharelinks.serializers import ShareLinkSerializer, ViewSessionSerializer
 from sharelinks.services import get_accessible_share_links_q
 from .serializers import (DashboardRecentLinkSerializer,
@@ -193,3 +194,46 @@ class ViewSessionDetailView(generics.RetrieveAPIView):
             share_link__in=accessible_links
         ).select_related('share_link', 'share_link__document', 'share_link__dataroom')
 
+
+
+@extend_schema(tags=['analytics'])
+class AccessEventsView(generics.ListAPIView):
+    """
+    Access log across every share link the user can manage, newest first.
+
+    Filters: ``category`` (access|behavior), ``event_type`` (comma separated; e.g.
+    ``access_request,access_request_denied``), ``email`` (contains), ``share_link_id``,
+    ``since`` / ``until`` (ISO 8601).
+    """
+    serializer_class = ShareLinkEventSerializer
+    pagination_class = StandardResultsSetPagination
+
+    def get_queryset(self):
+        accessible_links = ShareLink.objects.filter(get_accessible_share_links_q(self.request.user))
+        qs = ShareLinkEvent.objects.filter(share_link__in=accessible_links)
+        share_link_id = self.request.query_params.get('share_link_id')
+        if share_link_id:
+            qs = qs.filter(share_link_id=share_link_id)
+        return apply_event_filters(qs, self.request.query_params).order_by('-created_at')
+
+
+@extend_schema(tags=['analytics'])
+class AccessEventSummaryView(APIView):
+    """Counts per event type for the last ``days`` days (default 7, max 90)."""
+
+    def get(self, request):
+        try:
+            days = max(1, min(int(request.query_params.get('days', 7)), 90))
+        except ValueError:
+            days = 7
+        accessible_links = ShareLink.objects.filter(get_accessible_share_links_q(request.user))
+        counts = (
+            ShareLinkEvent.objects.filter(
+                share_link__in=accessible_links,
+                created_at__gte=timezone.now() - timedelta(days=days),
+            )
+            .order_by()
+            .values('event_type')
+            .annotate(total=Count('id'))
+        )
+        return Response({'days': days, 'counts': {row['event_type']: row['total'] for row in counts}})

@@ -11,7 +11,6 @@ from django_cryptography.conf import CryptographyConf
 from django_cryptography.core.signing import FernetSigner
 from django_cryptography.utils.crypto import FernetBytes, InvalidToken
 
-from automations.models import AutomationDestination
 from core.models import Organization, User
 from documents.models import Document
 from sharelinks.models import ShareLink
@@ -51,9 +50,6 @@ def test_reencrypt_data_models_and_fields_configured():
     assert "ShareLink" in configured_dict
     assert "password" in configured_dict["ShareLink"]
 
-    assert "AutomationDestination" in configured_dict
-    assert "signing_secret" in configured_dict["AutomationDestination"]
-
     # Verify that the explicit list accurately covers all models using EncryptedMixin
     discovered_models = set()
     for model_class in apps.get_models():
@@ -78,15 +74,6 @@ def test_reencrypt_data_full_key_rotation(monkeypatch):
 
     # 1. Create ShareLink with password
     sl = ShareLink.objects.create(created_by=user, document=doc, password="original_password_xyz")
-    # 2. Create AutomationDestination with signing_secret
-    ad = AutomationDestination.objects.create(
-        organization=org,
-        created_by=user,
-        name="Test Destination",
-        destination_type="webhook",
-        endpoint_url="https://example.com/webhook",
-        signing_secret="initial_webhook_secret",
-    )
 
     # Overwrite DB columns directly with ciphertext encrypted by the old secret key
     def _raw_encrypt(val):
@@ -96,10 +83,6 @@ def test_reencrypt_data_full_key_rotation(monkeypatch):
         cursor.execute(
             "UPDATE sharelinks_sharelink SET password = %s WHERE id = %s",
             [_raw_encrypt("original_password_xyz"), sl.id],
-        )
-        cursor.execute(
-            "UPDATE automations_automationdestination SET signing_secret = %s WHERE id = %s",
-            [_raw_encrypt("initial_webhook_secret"), ad.id],
         )
 
     # Confirm that loading via standard ORM currently fails to decrypt with current secret
@@ -118,9 +101,6 @@ def test_reencrypt_data_full_key_rotation(monkeypatch):
     # Reload records and confirm all fields are now cleanly decrypted with current secret key
     sl_reloaded = ShareLink.objects.get(id=sl.id)
     assert sl_reloaded.password == "original_password_xyz"
-
-    ad_reloaded = AutomationDestination.objects.get(id=ad.id)
-    assert ad_reloaded.signing_secret == "initial_webhook_secret"
 
 
 @pytest.mark.django_db

@@ -1,10 +1,11 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { edgeInspect } from "./security-edge.js";
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [edgeInspect(), react()],
   build: {
     rollupOptions: {
       output: {
@@ -42,14 +43,17 @@ export default defineConfig({
       '/api': {
         target: 'http://backend:8000',
         changeOrigin: true,
+        xfwd: true, // pass the real client address on (the app otherwise sees only this container)
       },
       '/media': {
         target: 'http://backend:8000',
         changeOrigin: true,
+        xfwd: true, // pass the real client address on (the app otherwise sees only this container)
       },
       '/files': {
-        target: 'http://core:8080',
+        target: process.env.CORE_PROXY_TARGET || 'http://core:8080',   // https://core:8080 when the stack uses TLS
         changeOrigin: true,
+        secure: true,                 // the file service certificate is checked (NODE_EXTRA_CA_CERTS = internal CA)
       },      
     },
   },  

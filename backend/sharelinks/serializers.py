@@ -33,19 +33,13 @@ class RecordVisitSerializer(serializers.Serializer):
 
 
 class PageViewSerializer(serializers.ModelSerializer):
-    url = serializers.SerializerMethodField()
-
     class Meta:
         model = PageView
         fields = [
-            'page_number', 'duration_seconds', 'url', 'created_at', 'media_type',
+            'page_number', 'duration_seconds', 'created_at', 'media_type',
             'video_start_time', 'video_end_time', 'video_volume', 'is_fullscreen', 'playback_speed',
             'scroll_percentage'
         ]
-
-    def get_url(self, obj) -> str | None:
-        pages_map = self.context.get('pages_map', {})
-        return pages_map.get(obj.page_number)
 
 
 class LinkClickSerializer(serializers.ModelSerializer):
@@ -478,7 +472,8 @@ class ShareLinkSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'document', 'dataroom', 'document_name', 'document_type', 'dataroom_name', 'dataroom_settings', 'created_by', 'created_by_user', 'name', 'slug', 'url', 'expires_at',
             'has_password', 'password', 'requires_email', 'requires_email_verification', 'allow_download', 'enable_qna',
-            'enable_watermark', 'watermark_text', 'receive_email_notification', 'is_active', 'created_at', 'updated_at',
+            'enable_watermark', 'watermark_text', 'receive_email_notification', 'blur_when_unfocused', 'restricted_viewing_pane',
+            'is_active', 'created_at', 'updated_at',
             'view_count', 'recent_view_sessions', 'last_viewed_at', 'require_nda', 'nda_text', 'nda_version', 'has_accepted_current_nda'
         ]
         read_only_fields = [

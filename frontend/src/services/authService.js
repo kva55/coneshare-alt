@@ -1,30 +1,18 @@
 import api from './api';
 
-const storeTokens = (data) => {
-  if (!data) return;
-  if (data.access) localStorage.setItem('access_token', data.access);
-  if (data.refresh) localStorage.setItem('refresh_token', data.refresh);
-};
-
+// Tokens are httpOnly cookies managed by the backend; nothing is stored in the browser
+// by JavaScript.
 const login = async (email, password) => {
   const response = await api.post('/token/', { email, password });
-  storeTokens(response.data);
-  return response.data;
+  return response.data.user;
 };
 
 const logout = async () => {
-  const refreshToken = localStorage.getItem('refresh_token');
   try {
-    if (refreshToken) {
-      await api.post('/logout/', { refresh: refreshToken });
-    }
+    await api.post('/token/logout/');
   } catch (error) {
-    // Log the error but proceed with cleanup
+    // Log the error but proceed: the UI session is over either way.
     console.error('Logout failed:', error);
-  } finally {
-    // Always clear local storage on logout
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
   }
 };
 

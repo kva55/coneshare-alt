@@ -1,4 +1,7 @@
-from django.core.management.base import BaseCommand
+import os
+
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from core.models import User, Organization
 from documents.models import Document, DocumentVersion, Folder
@@ -8,6 +11,12 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        if not settings.DEBUG:
+            raise CommandError('create_test_data only runs with DEBUG=True.')
+        password = os.environ.get('E2E_TEST_PASSWORD', '').strip()
+        if len(password) < 12:
+            raise CommandError('Set E2E_TEST_PASSWORD (at least 12 characters) for the test user.')
+
         self.stdout.write('Creating test data...')
 
         # Get or create the default organization
@@ -22,9 +31,9 @@ class Command(BaseCommand):
                 'name': 'Test User',
             }
         )
+        user.set_password(password)
+        user.save()
         if created:
-            user.set_password('password123')
-            user.save()
             self.stdout.write(self.style.SUCCESS(f'Created user: {user.email}'))
         else:
             self.stdout.write(f'User {user.email} already exists.')

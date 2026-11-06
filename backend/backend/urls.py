@@ -19,10 +19,9 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-from rest_framework_simplejwt.views import TokenRefreshView
 
-from core.views import (CustomTokenObtainPairView, LanguagesView, LogoutView, PublicSettingsView,
-                        SetPasswordView)
+from core.views import (AuthMeView, CookieTokenRefreshView, CustomTokenObtainPairView, LanguagesView,
+                        LogoutView, PublicSettingsView, SetPasswordView)
 
 
 urlpatterns = [
@@ -31,8 +30,10 @@ urlpatterns = [
     path('api/v1/languages/', LanguagesView.as_view(), name='languages'),
     path('api/v1/public/settings/', PublicSettingsView.as_view(), name='public_settings'),
     path('api/v1/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('api/v1/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    path('api/v1/logout/', LogoutView.as_view(), name='logout'),
+    # Auth tokens live in httpOnly cookies; the refresh cookie is scoped to /api/v1/token/.
+    path('api/v1/token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
+    path('api/v1/token/logout/', LogoutView.as_view(), name='logout'),
+    path('api/v1/auth/me/', AuthMeView.as_view(), name='auth_me'),
     path('api/v1/users/set-password/', SetPasswordView.as_view(), name='set_password'),
     path('api/v1/', include('core.urls')),
     path('api/v1/', include('documents.urls')),
@@ -40,6 +41,9 @@ urlpatterns = [
     path('api/v1/', include('datarooms.urls')),
     path('api/v1/', include('analytics.urls')),
     path('api/v1/', include('automations.urls')),
+    path('api/v1/checkout/', include('checkout.urls')),
+    path('api/v1/', include('security.urls')),
+    path('api/v1/', include('retention.urls')),
     path('api/v1/admin/', include('core.admin_urls')),
     path('api/v1/admin/datarooms/', include('datarooms.admin_urls')),
 ]

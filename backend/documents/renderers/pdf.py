@@ -14,8 +14,6 @@ class PDFRenderer(BasePreviewRenderer):
     ('server_pages') via poppler; the original PDF is never sent to the browser.
     """
 
-    can_reuse_page_url_for_download: bool = False
-
     @classmethod
     def can_handle_file(cls, content_type: str, filename: str) -> bool:
         if filename:

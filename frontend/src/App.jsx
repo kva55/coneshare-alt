@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { Route, Routes } from 'react-router';
+import { Navigate, Route, Routes } from 'react-router';
 import { Toaster } from 'sonner';
 import './App.css';
 import MainLayout from './components/layout/MainLayout';
@@ -27,6 +27,8 @@ const TrashPage = lazy(() => import('./pages/TrashPage'));
 const DataroomsPage = lazyNamed(() => import('./pages/DataroomsPage'), 'DataroomsPage');
 const DataroomPage = lazyNamed(() => import('./pages/DataroomPage'), 'DataroomPage');
 const AllLinksPage = lazyNamed(() => import('./pages/AllLinksPage'), 'AllLinksPage');
+const InteractionActivityPage = lazyNamed(() => import('./pages/InteractionActivityPage'), 'InteractionActivityPage');
+const AccessEventsPage = lazyNamed(() => import('./pages/AccessEventsPage'), 'AccessEventsPage');
 const AllViewSessionsPage = lazyNamed(() => import('./pages/AllViewSessionsPage'), 'AllViewSessionsPage');
 const AutomationsPage = lazyNamed(() => import('./pages/AutomationsPage'), 'AutomationsPage');
 const UserSettingsPage = lazy(() => import('./pages/UserSettingsPage'));
@@ -36,6 +38,12 @@ const AdminBrandingPage = lazyNamed(() => import('./pages/AdminBrandingPage'), '
 const AdminLoginActivityPage = lazyNamed(() => import('./pages/AdminLoginActivityPage'), 'AdminLoginActivityPage');
 const AdminUsersPage = lazyNamed(() => import('./pages/AdminUsersPage'), 'AdminUsersPage');
 const AdminUserDetailPage = lazyNamed(() => import('./pages/AdminUserDetailPage'), 'AdminUserDetailPage');
+const CheckoutPage = lazyNamed(() => import('./pages/CheckoutPage'), 'CheckoutPage');
+const CheckoutViewerPage = lazyNamed(() => import('./pages/CheckoutViewerPage'), 'CheckoutViewerPage');
+const AdminSecurityPage = lazyNamed(() => import('./pages/AdminSecurityPage'), 'AdminSecurityPage');
+const CheckOutCenterPage = lazyNamed(() => import('./pages/CheckOutCenterPage'), 'CheckOutCenterPage');
+const CheckoutReportPage = lazyNamed(() => import('./pages/CheckoutReportPage'), 'CheckoutReportPage');
+const AdminRetentionPage = lazyNamed(() => import('./pages/AdminRetentionPage'), 'AdminRetentionPage');
 const AdminDataroomsPage = lazyNamed(() => import('./pages/AdminDataroomsPage'), 'AdminDataroomsPage');
 
 function RouteLoadingFallback() {
@@ -57,6 +65,8 @@ function App() {
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/view/:slug" element={<ShareLinkViewerPage />} />
+                <Route path="/checkout" element={<CheckoutPage />} />
+                <Route path="/checkout/view/:checkoutId" element={<CheckoutViewerPage />} />
                 <Route path="/500" element={<ErrorPage />} />
                 <Route element={<AuthGuard />}>
                   <Route element={<MainLayout />}>
@@ -70,6 +80,8 @@ function App() {
                     <Route path="/datarooms/:dataroomId" element={<DataroomPage />} />
                     <Route path="/analytics/links" element={<AllLinksPage />} />
                     <Route path="/analytics/view-sessions" element={<AllViewSessionsPage />} />
+                    <Route path="/analytics/access-events" element={<AccessEventsPage />} />
+                    <Route path="/interactions" element={<InteractionActivityPage />} />
                     <Route path="/automations" element={<AutomationsPage />} />
                     <Route path="/settings" element={<UserSettingsPage />} />
                     <Route path="/settings/password" element={<PasswordSettingsPage />} />
@@ -78,6 +90,11 @@ function App() {
                     <Route path="/admin/users" element={<AdminUsersPage />} />
                     <Route path="/admin/users/:userId" element={<AdminUserDetailPage />} />
                     <Route path="/admin/datarooms" element={<AdminDataroomsPage />} />
+                    <Route path="/check-out-center" element={<CheckOutCenterPage />} />
+                    <Route path="/check-out-center/sessions/:checkoutId" element={<CheckoutReportPage />} />
+                    <Route path="/admin/checkout" element={<Navigate to="/check-out-center" replace />} />
+                    <Route path="/admin/security" element={<AdminSecurityPage />} />
+                    <Route path="/admin/retention" element={<AdminRetentionPage />} />
                     <Route path="/admin/login-activity" element={<AdminLoginActivityPage />} />
                     <Route path="*" element={<NotFoundPage />} />
                   </Route>

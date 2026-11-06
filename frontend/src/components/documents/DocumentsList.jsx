@@ -45,6 +45,7 @@ export function DocumentsList({
   onShare,
   onDownload,
   onCopy,
+  onCheckoutAccess,
   themed = false,
   showIndex = false,
   viewsTooltip = "Views recorded for this item.",
@@ -290,6 +291,7 @@ export function DocumentsList({
                   onRename={onRename || internalHandleRename}
                   onDelete={onDelete || internalHandleDelete}
                   onShare={onShare}
+                  onCheckoutAccess={onCheckoutAccess}
                   onToggleStar={onToggleStar}
                   isReadOnly={isReadOnly}
                   showActions={showActions}

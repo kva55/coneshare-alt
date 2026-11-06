@@ -388,7 +388,8 @@ def filter_unreferenced_storage_keys(
 def safe_delete_storage_file(
     storage_key: str,
     organization_id,
-    exclude_document_ids: Optional[Union[List, Set]] = None
+    exclude_document_ids: Optional[Union[List, Set]] = None,
+    secure: bool = False,
 ) -> bool:
     """
     Safely deletes a physical file from the storage server after confirming that
@@ -402,7 +403,7 @@ def safe_delete_storage_file(
         )
         return False
 
-    fileserver_client.delete_file(storage_key)
+    fileserver_client.delete_file(storage_key, secure=secure)
     return True
 
 
@@ -553,7 +554,7 @@ def delete_folder_and_contents(folder: Folder):
             touch_folder_ancestors(parent_folder)
 
 
-def delete_document_and_files(document: Document, is_vault: Optional[bool] = None):
+def delete_document_and_files(document: Document, is_vault: Optional[bool] = None, secure: bool = False):
     """
     Deletes a document, its versions, pages, and all associated files from storage.
     If is_vault is provided, uses it directly to determine whether to skip decrementing
@@ -572,7 +573,7 @@ def delete_document_and_files(document: Document, is_vault: Optional[bool] = Non
     deletion_errors = []
     for key in storage_keys_to_delete:
         try:
-            safe_delete_storage_file(key, document.organization_id, exclude_document_ids=[document.pk])
+            safe_delete_storage_file(key, document.organization_id, exclude_document_ids=[document.pk], secure=secure)
         except APIException as e:
             logger.error(f"Failed to delete file {key} from file server: {e}")
             deletion_errors.append(key)

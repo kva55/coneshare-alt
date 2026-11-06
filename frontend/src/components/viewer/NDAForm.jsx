@@ -8,6 +8,7 @@ import { Button } from '../ui/Button';
 import { GateLayout } from './GateLayout';
 import { useBranding } from '../../contexts/BrandingProvider';
 import { cn } from '../../lib/utils';
+import { NdaLink } from '../common/NdaLink';
 
 export function NDAForm({ slug, onSuccess, publicMeta = null }) {
   const { t } = useTranslation();
@@ -94,6 +95,7 @@ export function NDAForm({ slug, onSuccess, publicMeta = null }) {
           >
             {ndaText}
           </div>
+          <NdaLink className="px-0.5 text-xs" />
         </div>
 
         {/* Agreement Checkbox & Primary CTA */}

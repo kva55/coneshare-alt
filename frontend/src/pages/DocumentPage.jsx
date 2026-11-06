@@ -10,9 +10,12 @@ import { getLocalizedErrorMessage } from '../utils/errorTranslator';
 import { DocumentHeader } from '../components/documents/DocumentHeader';
 import { LinksTable } from '../components/documents/LinksTable';
 import { ViewSessionsTable } from '../components/documents/ViewSessionsTable';
+import { ViewerActivityPanel } from '../components/documents/ViewerActivityPanel';
 import { Stats } from '../components/documents/Stats';
 import { Skeleton } from '../components/ui/Skeleton';
 import { LinkSheet } from '../components/links/LinkSheet';
+import { DocumentRetention } from '../components/documents/DocumentRetention';
+import { AccessPolicyDialog } from '../components/links/AccessPolicyDialog';
 import { DocumentPreviewModal } from '../components/documents/DocumentPreviewModal';
 import { ConfirmationDialog } from '../components/dialogs/ConfirmationDialog';
 import { OwnerQnAManager } from '../components/qna/OwnerQnAManager';
@@ -32,6 +35,7 @@ export function DocumentPage() {
   const [loading, setLoading] = useState(true);
   const [viewsLoading, setViewsLoading] = useState(true);
   const [isLinkSheetOpen, setIsLinkSheetOpen] = useState(false);
+  const [isAccessOpen, setIsAccessOpen] = useState(false);
   const [editingLink, setEditingLink] = useState(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -317,6 +321,7 @@ export function DocumentPage() {
       <DocumentHeader
         document={document}
         onCreateLink={handleCreateLink}
+        onAccessSettings={() => setIsAccessOpen(true)}
         onPreview={handlePreview}
         onDownload={handleDownload}
         onDelete={handleDelete}
@@ -328,6 +333,7 @@ export function DocumentPage() {
         <Stats stats={stats} />
         {canManage ? (
           <>
+            <DocumentRetention document={document} onSaved={() => fetchDocumentAndStats({ showSkeleton: false })} />
             <LinksTable
               links={document.share_links}
               onEditLink={handleEditLink}
@@ -335,6 +341,7 @@ export function DocumentPage() {
               onLinkUpdate={handleLinkUpdate}
               contextType="document"
             />
+            <ViewerActivityPanel documentId={documentId} />
             <ViewSessionsTable
               views={viewsData?.results || []}
               totalCount={viewsData?.count || 0}
@@ -365,6 +372,7 @@ export function DocumentPage() {
           </div>
         )}
       </div>
+      <AccessPolicyDialog open={isAccessOpen} onOpenChange={setIsAccessOpen} kind="document" ident={documentId} label={document?.name} />
       <LinkSheet
         isOpen={isLinkSheetOpen}
         onOpenChange={setIsLinkSheetOpen}

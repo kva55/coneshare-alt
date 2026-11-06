@@ -1,0 +1,8 @@
+{% autoescape off %}Hello,
+
+{% if inviter %}{{ inviter }} has given you access{% else %}You have been given access{% endif %} to "{{ target_name }}".
+
+Open it here: {{ view_url }}
+
+When you open the link, enter this email address ({{ email }}). We will email you a one-time access code each time you need to sign in. This message does not contain a code and cannot be used to open the document on its own.
+{% endautoescape %}

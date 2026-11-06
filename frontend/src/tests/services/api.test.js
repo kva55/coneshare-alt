@@ -13,6 +13,8 @@ import {
   updateOwnerQnaThreadStatus,
   downloadDataroomFolder,
   downloadDataroomArchive,
+  fetchSharePageBlob,
+  fetchDocumentPageBlob,
 } from "../../services/api";
 import { DATAROOM_VIEWER_PAGE_SIZE } from "../../constants/pagination";
 import axios from "axios";
@@ -67,141 +69,7 @@ describe("API Service Interceptors", () => {
     window.location = originalWindowLocation;
   });
 
-  describe("Request Interceptor", () => {
-    it("should add Authorization header if access token exists", async () => {
-      localStorage.setItem("access_token", "test_token");
-      mockAdapter.mockResolvedValue({ data: "success" });
-
-      await api.get("/test");
-
-      const requestConfig = mockAdapter.mock.calls[0][0];
-      expect(requestConfig.headers.Authorization).toBe("Bearer test_token");
-    });
-
-    it("should not add Authorization header if no access token exists", async () => {
-      mockAdapter.mockResolvedValue({ data: "success" });
-
-      await api.get("/test");
-
-      const requestConfig = mockAdapter.mock.calls[0][0];
-      expect(requestConfig.headers.Authorization).toBeUndefined();
-    });
-  });
-
   describe("Response Interceptor", () => {
-    it("should refresh token and retry original request on 401", async () => {
-      localStorage.setItem("refresh_token", "test_refresh_token");
-
-      // Mock the first API call to fail with 401
-      mockAdapter.mockRejectedValueOnce({
-        response: { status: 401 },
-        config: { url: "/protected", headers: {} },
-      });
-
-      // Mock the successful retry
-      mockAdapter.mockResolvedValueOnce({ data: "success" });
-
-      // Mock the refresh token call to succeed
-      axios.post.mockResolvedValue({
-        data: { access: "new_access_token" },
-      });
-
-      const response = await api.get("/protected");
-
-      // Verify refresh endpoint was called
-      expect(axios.post).toHaveBeenCalledTimes(1);
-      expect(axios.post).toHaveBeenCalledWith("/api/v1/token/refresh/", {
-        refresh: "test_refresh_token",
-      });
-
-      // Verify new token was stored
-      expect(localStorage.getItem("access_token")).toBe("new_access_token");
-
-      // Verify original request was retried with new token
-      expect(mockAdapter).toHaveBeenCalledTimes(2);
-      const retryConfig = mockAdapter.mock.calls[1][0];
-      expect(retryConfig.headers.Authorization).toBe(
-        "Bearer new_access_token"
-      );
-
-      // Verify final response is correct
-      expect(response.data).toBe("success");
-    });
-
-    it("should redirect to login if refresh token call fails", async () => {
-      localStorage.setItem("refresh_token", "test_refresh_token");
-      const refreshError = new Error("Refresh failed");
-      axios.post.mockRejectedValue(refreshError);
-
-      mockAdapter.mockRejectedValue({
-        response: { status: 401 },
-        config: { url: "/protected" },
-      });
-
-      await expect(api.get("/protected")).rejects.toThrow(refreshError);
-
-      expect(localStorage.removeItem).toHaveBeenCalledWith("access_token");
-      expect(localStorage.removeItem).toHaveBeenCalledWith("refresh_token");
-      expect(window.location.href).toBe("/login");
-    });
-
-    it("should redirect to login on 401 if no refresh token exists", async () => {
-      const originalError = {
-        response: { status: 401 },
-        config: { url: "/protected" },
-      };
-      mockAdapter.mockRejectedValue(originalError);
-
-      await expect(api.get("/protected")).rejects.toBe(originalError);
-
-      expect(axios.post).not.toHaveBeenCalled();
-      expect(window.location.href).toBe("/login");
-      expect(localStorage.removeItem).toHaveBeenCalled();
-    });
-
-    it("should handle multiple concurrent requests with a single token refresh", async () => {
-      localStorage.setItem("refresh_token", "test_refresh_token");
-
-      // Mock initial failed requests.
-      const error401_1 = {
-        response: { status: 401 },
-        config: { headers: {}, url: '/protected1' },
-      };
-      const error401_2 = {
-        response: { status: 401 },
-        config: { headers: {}, url: '/protected2' },
-      };
-      mockAdapter.mockRejectedValueOnce(error401_1); // for /protected1
-      mockAdapter.mockRejectedValueOnce(error401_2); // for /protected2
-
-      // Mock successful retries.
-      mockAdapter.mockResolvedValue({ data: "success" });
-
-      // Mock successful token refresh.
-      axios.post.mockResolvedValue({
-        data: { access: "new_access_token" },
-      });
-
-      // Fire two requests concurrently.
-      const promise1 = api.get("/protected1");
-      const promise2 = api.get("/protected2");
-
-      const [response1, response2] = await Promise.all([promise1, promise2]);
-
-      // Verify that refresh was only called once for both requests.
-      expect(axios.post).toHaveBeenCalledTimes(1);
-      expect(axios.post).toHaveBeenCalledWith("/api/v1/token/refresh/", {
-        refresh: "test_refresh_token",
-      });
-
-      // Verify both requests eventually succeeded.
-      expect(response1.data).toBe("success");
-      expect(response2.data).toBe("success");
-
-      // Verify new token was stored.
-      expect(localStorage.getItem("access_token")).toBe("new_access_token");
-    });
-
     it("should not redirect to login for wrong share-link password (public flow 401)", async () => {
       const originalError = {
         response: {
@@ -313,94 +181,117 @@ describe("API Service Interceptors", () => {
       expect(toast.error).toHaveBeenCalled();
     });
 
-    it("should not redirect to /login on 401 when request is for public viewer route without refresh token and should display toast", async () => {
-      window.location.pathname = "/view/public-slug";
+  });
 
-      const originalError = {
-        response: {
-          status: 401,
-          data: { detail: "Unauthorized" },
-        },
-        config: { url: "/links/public-slug/data/" },
-      };
-      mockAdapter.mockRejectedValue(originalError);
-
-      await expect(api.get("/links/public-slug/data/")).rejects.toBe(originalError);
-
-      expect(window.location.href).toBe("");
-      expect(toast.error).toHaveBeenCalled();
+  describe("Cookie session handling", () => {
+    const setCsrfCookie = (value) => {
+      document.cookie = `csrftoken=${value}; path=/`;
+    };
+    afterEach(() => {
+      document.cookie = "csrftoken=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
     });
 
-    it("should not redirect to /login when token refresh fails for public viewer on /view/:slug route", async () => {
-      window.location.pathname = "/view/public-slug";
-      localStorage.setItem("refresh_token", "stale_token");
-      axios.post.mockRejectedValue(new Error("Refresh failed"));
+    it("sends cookies and never an Authorization header, even if a token sits in localStorage", async () => {
+      localStorage.setItem("access_token", "must-be-ignored");
+      mockAdapter.mockResolvedValue({ data: "ok" });
 
-      const originalError = {
-        response: {
-          status: 401,
-          data: { detail: "Unauthorized link" },
-        },
+      await api.get("/test");
+
+      const config = mockAdapter.mock.calls[0][0];
+      expect(config.withCredentials).toBe(true);
+      expect(config.headers.Authorization).toBeUndefined();
+    });
+
+    it("adds the CSRF header on writes but not on reads", async () => {
+      setCsrfCookie("csrf-abc123");
+      mockAdapter.mockResolvedValue({ data: "ok" });
+
+      await api.post("/things/", { a: 1 });
+      await api.get("/things/");
+
+      expect(mockAdapter.mock.calls[0][0].headers["X-CSRFToken"]).toBe("csrf-abc123");
+      expect(mockAdapter.mock.calls[1][0].headers["X-CSRFToken"]).toBeUndefined();
+    });
+
+    it("refreshes through the cookie and retries the original request on 401", async () => {
+      mockAdapter.mockRejectedValueOnce({
+        response: { status: 401 },
+        config: { url: "/protected", headers: {} },
+      });
+      mockAdapter.mockResolvedValueOnce({ data: "success" });
+      axios.post.mockResolvedValue({ data: { detail: "refreshed" } });
+
+      const response = await api.get("/protected");
+
+      expect(axios.post).toHaveBeenCalledTimes(1);
+      expect(axios.post).toHaveBeenCalledWith(
+        "/api/v1/token/refresh/",
+        null,
+        expect.objectContaining({ withCredentials: true })
+      );
+      expect(mockAdapter).toHaveBeenCalledTimes(2);
+      expect(response.data).toBe("success");
+      expect(localStorage.getItem("access_token")).toBeNull();
+      expect(localStorage.getItem("refresh_token")).toBeNull();
+    });
+
+    it("redirects to /login when the refresh fails", async () => {
+      const refreshError = new Error("Refresh failed");
+      axios.post.mockRejectedValue(refreshError);
+      mockAdapter.mockRejectedValue({
+        response: { status: 401 },
+        config: { url: "/protected" },
+      });
+
+      await expect(api.get("/protected")).rejects.toThrow(refreshError);
+
+      expect(window.location.href).toBe("/login");
+    });
+
+    it("lets session probes handle a failed refresh themselves (skipAuthRedirect)", async () => {
+      axios.post.mockRejectedValue(new Error("Refresh failed"));
+      mockAdapter.mockRejectedValue({
+        response: { status: 401 },
+        config: { url: "/auth/me/", skipAuthRedirect: true },
+      });
+
+      await expect(api.get("/auth/me/", { skipAuthRedirect: true })).rejects.toBeDefined();
+
+      expect(window.location.href).toBe("");
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("shares a single refresh between concurrent 401s", async () => {
+      mockAdapter.mockRejectedValueOnce({
+        response: { status: 401 },
+        config: { headers: {}, url: "/protected1" },
+      });
+      mockAdapter.mockRejectedValueOnce({
+        response: { status: 401 },
+        config: { headers: {}, url: "/protected2" },
+      });
+      mockAdapter.mockResolvedValue({ data: "success" });
+      axios.post.mockResolvedValue({ data: { detail: "refreshed" } });
+
+      const [response1, response2] = await Promise.all([api.get("/protected1"), api.get("/protected2")]);
+
+      expect(axios.post).toHaveBeenCalledTimes(1);
+      expect(response1.data).toBe("success");
+      expect(response2.data).toBe("success");
+    });
+
+    it("does not redirect public viewers when the refresh fails; it shows the error instead", async () => {
+      window.location.pathname = "/view/public-slug";
+      axios.post.mockRejectedValue(new Error("Refresh failed"));
+      mockAdapter.mockRejectedValue({
+        response: { status: 401, data: { detail: "Unauthorized link" } },
         config: { url: "/links/public-slug/data/" },
-      };
-      mockAdapter.mockRejectedValue(originalError);
+      });
 
       await expect(api.get("/links/public-slug/data/")).rejects.toBeDefined();
 
       expect(window.location.href).toBe("");
-      expect(localStorage.removeItem).toHaveBeenCalledWith("access_token");
-      expect(localStorage.removeItem).toHaveBeenCalledWith("refresh_token");
       expect(toast.error).toHaveBeenCalled();
-    });
-
-    it("should not redirect to /login when token refresh fails on public upload route /upload/:slug", async () => {
-      window.location.pathname = "/upload/request-slug";
-      localStorage.setItem("refresh_token", "stale_token");
-      axios.post.mockRejectedValue(new Error("Refresh failed"));
-
-      const originalError = {
-        response: {
-          status: 401,
-          data: { detail: "File request expired" },
-        },
-        config: { url: "/file-requests/request-slug/public/" },
-      };
-      mockAdapter.mockRejectedValue(originalError);
-
-      await expect(api.get("/file-requests/request-slug/public/")).rejects.toBeDefined();
-
-      expect(window.location.href).toBe("");
-      expect(toast.error).toHaveBeenCalled();
-    });
-
-    it("should redirect to /login on 401 when fetching protected document view-sessions without refresh token", async () => {
-      const originalError = {
-        response: {
-          status: 401,
-          data: { detail: "Authentication credentials were not provided." },
-        },
-        config: { url: "/documents/doc-1/view-sessions/?page=1" },
-      };
-      mockAdapter.mockRejectedValue(originalError);
-
-      await expect(api.get("/documents/doc-1/view-sessions/?page=1")).rejects.toBe(originalError);
-
-      expect(window.location.href).toBe("/login");
-    });
-
-    it("should redirect to /login on 401 when fetching protected analytics links without refresh token", async () => {
-      const originalError = {
-        response: {
-          status: 401,
-          data: { detail: "Authentication credentials were not provided." },
-        },
-        config: { url: "/analytics/links/?page=1" },
-      };
-      mockAdapter.mockRejectedValue(originalError);
-
-      await expect(api.get("/analytics/links/?page=1")).rejects.toBe(originalError);
-
-      expect(window.location.href).toBe("/login");
     });
   });
 
@@ -584,6 +475,55 @@ describe("API Service Interceptors", () => {
         subject: "Owner question",
         body: "Please review this.",
       });
+    });
+  });
+
+  describe("Page image requests", () => {
+    it("fetches share-link pages with a script-only POST (no URL, no error toast)", async () => {
+      const blob = new Blob(["x"]);
+      mockAdapter.mockResolvedValue({ data: blob });
+
+      const result = await fetchSharePageBlob("slug-1", 3, { dataroomDocumentId: "dd1" });
+
+      const config = mockAdapter.mock.calls[0][0];
+      expect(config.method).toBe("post");
+      expect(config.url).toBe("/links/slug-1/pages/3/");
+      expect(config.params).toEqual({ dataroom_document_id: "dd1" });
+      expect(config.headers["X-Page-Request"]).toBe("1");
+      expect(config.responseType).toBe("blob");
+      expect(config.skipErrorToast).toBe(true);
+      expect(result).toBe(blob);
+    });
+
+    it("omits the dataroom parameter for plain document links", async () => {
+      mockAdapter.mockResolvedValue({ data: new Blob(["x"]) });
+
+      await fetchSharePageBlob("slug-2", 1);
+
+      expect(mockAdapter.mock.calls[0][0].params).toBeUndefined();
+    });
+
+    it("fetches owner document pages the same way", async () => {
+      mockAdapter.mockResolvedValue({ data: new Blob(["x"]) });
+
+      await fetchDocumentPageBlob("doc-9", 2);
+
+      const config = mockAdapter.mock.calls[0][0];
+      expect(config.method).toBe("post");
+      expect(config.url).toBe("/documents/doc-9/pages/2/");
+      expect(config.headers["X-Page-Request"]).toBe("1");
+      expect(config.responseType).toBe("blob");
+    });
+
+    it("reports page failures inline instead of toasting", async () => {
+      mockAdapter.mockRejectedValue({
+        response: { status: 503, data: { detail: "Could not retrieve file." } },
+        config: { url: "/links/s/pages/1/", skipErrorToast: true },
+      });
+
+      await expect(fetchSharePageBlob("s", 1)).rejects.toBeDefined();
+
+      expect(toast.error).not.toHaveBeenCalled();
     });
   });
 

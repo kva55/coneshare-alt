@@ -26,7 +26,6 @@ help:
 	@echo "  test.front      - Run frontend linter and whitelisted tests"
 	@echo "  lint.front      - Run frontend linter with eslint"
 	@echo "  test.core       - Run core service tests with go test"
-	@echo "  lint.docs       - Validate feature docs template sections"
 	@echo "  migrate         - Run database migrations"
 	@echo "  superuser       - Create a superuser"
 	@echo "  compile.po      - Compile translation catalogs (.po -> .mo)"
@@ -127,11 +126,6 @@ test.front:
 test.core:
 	@echo "Running core service Go tests..."
 	COMPOSE_PROJECT_NAME=coneshare docker-compose exec core go test ./...
-
-.PHONY: lint.docs
-lint.docs:
-	@echo "Running feature docs checks..."
-	./scripts/check-feature-docs.sh
 
 .PHONY: migrate
 migrate:

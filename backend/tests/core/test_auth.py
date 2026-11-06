@@ -1,7 +1,9 @@
 import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.test import Client
 from rest_framework import status
+from rest_framework.test import APIClient
 
 from core.models import LoginActivity
 
@@ -34,24 +36,6 @@ User = get_user_model()
 
 
 @pytest.mark.django_db
-def test_login_success(public_client, user):
-    """
-    Test that a user can successfully log in and receive access and refresh tokens.
-    """
-    # The user fixture creates a user with password 'password'
-    login_data = {
-        'email': user.email,
-        'password': 'password'
-    }
-    url = reverse('token_obtain_pair')
-    response = public_client.post(url, login_data)
-
-    assert response.status_code == status.HTTP_200_OK
-    assert 'access' in response.data
-    assert 'refresh' in response.data
-
-
-@pytest.mark.django_db
 def test_login_failure_wrong_password(public_client, user):
     """
     Test that a login attempt with an incorrect password fails.
@@ -64,55 +48,6 @@ def test_login_failure_wrong_password(public_client, user):
     response = public_client.post(url, login_data)
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-
-
-@pytest.mark.django_db
-def test_token_refresh(public_client, user):
-    """
-    Test that a valid refresh token can be used to obtain a new access token.
-    """
-    # First, log in to get a refresh token
-    login_data = {'email': user.email, 'password': 'password'}
-    login_url = reverse('token_obtain_pair')
-    login_response = public_client.post(login_url, login_data)
-    refresh_token = login_response.data['refresh']
-
-    # Now, use the refresh token to get a new access token
-    refresh_url = reverse('token_refresh')
-    refresh_response = public_client.post(refresh_url, {'refresh': refresh_token})
-
-    assert refresh_response.status_code == status.HTTP_200_OK
-    assert 'access' in refresh_response.data
-
-
-@pytest.mark.django_db
-def test_logout(public_client, user):
-    """
-    Test that a user can log out, which blacklists their refresh token,
-    preventing it from being used for subsequent token refreshes.
-    """
-    # Step 1: Log in to get valid access and refresh tokens
-    login_data = {'email': user.email, 'password': 'password'}
-    login_url = reverse('token_obtain_pair')
-    login_response = public_client.post(login_url, login_data)
-    assert login_response.status_code == status.HTTP_200_OK
-    refresh_token = login_response.data['refresh']
-    access_token = login_response.data['access']
-
-    # Step 2: Use the access token to authenticate the logout request
-    public_client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
-    logout_url = reverse('logout')
-    logout_response = public_client.post(logout_url, {'refresh': refresh_token})
-
-    assert logout_response.status_code == status.HTTP_205_RESET_CONTENT
-
-    # Step 3: Verify the refresh token is now blacklisted and cannot be used
-    public_client.credentials()  # Clear auth header
-    refresh_url = reverse('token_refresh')
-    refresh_response = public_client.post(refresh_url, {'refresh': refresh_token})
-
-    assert refresh_response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert 'token_not_valid' in refresh_response.data.get('code', '')
 
 
 @pytest.mark.django_db
@@ -189,4 +124,113 @@ class TestLoginActivitySignal:
 
         assert LoginActivity.objects.count() == 0
 
+
+def _login(client, user, password='password'):
+    return client.post(reverse('token_obtain_pair'), {'email': user.email, 'password': password}, format='json')
+
+
+@pytest.mark.django_db
+class TestCookieAuth:
+    def test_login_sets_httponly_cookies_and_no_tokens_in_body(self, public_client, user):
+        response = _login(public_client, user)
+        assert response.status_code == status.HTTP_200_OK
+        assert 'access' not in response.data and 'refresh' not in response.data
+        assert response.data['user']['email'] == user.email
+
+        access = response.cookies['cs_access']
+        refresh = response.cookies['cs_refresh']
+        for cookie in (access, refresh):
+            assert cookie['httponly']
+            assert cookie['samesite'] == 'Strict'
+            assert cookie.value
+        assert access['path'] == '/api/'
+        assert refresh['path'] == '/api/v1/token/'
+        assert 'csrftoken' in response.cookies
+
+    def test_cookies_are_secure_when_debug_is_off(self, public_client, user, settings):
+        settings.AUTH_COOKIE_SECURE = True
+        response = _login(public_client, user)
+        assert response.cookies['cs_access']['secure']
+        assert response.cookies['cs_refresh']['secure']
+
+    def test_failed_login_sets_no_cookies(self, public_client, user):
+        response = _login(public_client, user, password='wrong')
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert 'cs_access' not in response.cookies and 'cs_refresh' not in response.cookies
+
+    def test_cookie_authenticates_reads_without_csrf(self, user):
+        client = APIClient()
+        _login(client, user)
+        response = client.get(reverse('auth_me'))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['email'] == user.email
+
+    def test_cookie_authenticated_write_requires_csrf(self, user):
+        client = APIClient(enforce_csrf_checks=True)
+        login = _login(client, user)
+        assert login.status_code == status.HTTP_200_OK
+        url = reverse('user-detail', kwargs={'pk': user.id})
+
+        # Cookie present, CSRF header missing -> rejected.
+        denied = client.patch(url, {'name': 'Changed'}, format='json')
+        assert denied.status_code == status.HTTP_403_FORBIDDEN
+
+        token = client.cookies['csrftoken'].value
+        allowed = client.patch(url, {'name': 'Changed'}, format='json', HTTP_X_CSRFTOKEN=token)
+        assert allowed.status_code == status.HTTP_200_OK
+        user.refresh_from_db()
+        assert user.name == 'Changed'
+
+    def test_bearer_header_still_works_without_csrf(self, user):
+        from rest_framework_simplejwt.tokens import AccessToken
+        client = APIClient(enforce_csrf_checks=True)
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {AccessToken.for_user(user)}')
+        url = reverse('user-detail', kwargs={'pk': user.id})
+        assert client.patch(url, {'name': 'Via header'}, format='json').status_code == status.HTTP_200_OK
+
+    def test_refresh_rotates_cookies_using_refresh_cookie(self, user):
+        client = APIClient()
+        login = _login(client, user)
+        old_refresh = login.cookies['cs_refresh'].value
+        response = client.post(reverse('token_refresh'), format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.cookies['cs_refresh'].value != old_refresh  # rotated
+        assert response.cookies['cs_access'].value
+        assert 'access' not in response.data
+
+    def test_refresh_without_cookie_is_unauthorized(self, public_client):
+        response = public_client.post(reverse('token_refresh'), format='json')
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_refresh_token_in_body_is_ignored(self, user, public_client):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        response = public_client.post(reverse('token_refresh'), {'refresh': str(RefreshToken.for_user(user))}, format='json')
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_logout_blacklists_refresh_and_clears_cookies(self, user):
+        client = APIClient()
+        login = _login(client, user)
+        stolen_refresh = login.cookies['cs_refresh'].value
+
+        response = client.post(reverse('logout'), format='json')
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        assert response.cookies['cs_access'].value == ''
+        assert response.cookies['cs_refresh'].value == ''
+
+        # The old refresh token is revoked server-side even if someone kept a copy.
+        replay = APIClient()
+        replay.cookies['cs_refresh'] = stolen_refresh
+        assert replay.post(reverse('token_refresh'), format='json').status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_logout_requires_csrf_token(self, user):
+        client = APIClient(enforce_csrf_checks=True)
+        _login(client, user)
+        denied = client.post(reverse('logout'), format='json')
+        assert denied.status_code == status.HTTP_403_FORBIDDEN
+        token = client.cookies['csrftoken'].value
+        ok = client.post(reverse('logout'), format='json', HTTP_X_CSRFTOKEN=token)
+        assert ok.status_code == status.HTTP_204_NO_CONTENT
+
+    def test_unauthenticated_me_is_401(self, public_client):
+        assert public_client.get(reverse('auth_me')).status_code == status.HTTP_401_UNAUTHORIZED
 
