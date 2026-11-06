@@ -182,7 +182,8 @@ export function CheckoutPage() {
   const continueWithLink = async () => {
     try {
       await consumeCheckoutLink(token);
-      navigate('/checkout', { replace: true }); // the token leaves the address bar
+      navigate('/checkout', { replace: true });   // the address is clean (the token was removed when the page opened)
+      await load();                               // signed in: show the portal now, not the confirm step again
     } catch {
       setPhase('invalid');
     }

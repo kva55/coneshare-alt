@@ -53,6 +53,10 @@ describe('CheckoutPage', () => {
     expect(screen.getByTestId('where')).toHaveTextContent(/^\/checkout$/);   // no token left in the address
     await user.click(screen.getByRole('button', { name: /^continue$/i }));
     expect(api.consumeCheckoutLink).toHaveBeenCalledWith('frag123');
+    // signed in: the portal replaces the confirm step, so there is nothing left to click a second time
+    expect(await screen.findByText('Legal room')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^continue$/i })).toBeNull();
+    expect(api.consumeCheckoutLink).toHaveBeenCalledTimes(1);
   });
 
   it('still accepts a link from an older e-mail (query) and removes it too', async () => {

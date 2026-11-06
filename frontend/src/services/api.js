@@ -810,8 +810,9 @@ export const getAccessEventSummary = (days = 7) => api.get('/analytics/access-ev
 // ---- /checkout (guest) ----
 export const requestCheckoutLink = (email) =>
   api.post('/checkout/auth/request/', { email }, { skipErrorToast: true });
+// POST with the token in the body, never in the address, so it is not written to a server or proxy log.
 export const peekCheckoutLink = (token) =>
-  api.get('/checkout/auth/link/', { params: { token }, skipErrorToast: true });
+  api.post('/checkout/auth/link/', { token }, { skipErrorToast: true });
 export const consumeCheckoutLink = (token) =>
   api.post('/checkout/auth/consume/', { token }, { skipErrorToast: true });
 export const getCheckoutSession = () => api.get('/checkout/session/', { skipErrorToast: true });

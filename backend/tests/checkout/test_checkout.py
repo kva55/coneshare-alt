@@ -135,11 +135,16 @@ class TestSignInLink:
         public_client.post(BASE + 'auth/request/', {'email': GUEST}, format='json')
         token = _link_from_mail()
         for _ in range(3):
-            peek = public_client.get(BASE + 'auth/link/', {'token': token})
+            peek = public_client.post(BASE + 'auth/link/', {'token': token}, format='json')
             assert peek.status_code == 200 and peek.json()['email'] == 'g***@lab.local'
         assert public_client.post(BASE + 'auth/consume/', {'token': token}, format='json').status_code == 200
         assert APIClient().post(BASE + 'auth/consume/', {'token': token}, format='json').status_code == 400
-        assert APIClient().get(BASE + 'auth/link/', {'token': token}).status_code == 400
+        assert APIClient().post(BASE + 'auth/link/', {'token': token}, format='json').status_code == 400
+
+    def test_the_token_is_never_accepted_in_an_address(self, policy, public_client):
+        public_client.post(BASE + 'auth/request/', {'email': GUEST}, format='json')
+        token = _link_from_mail()
+        assert public_client.get(BASE + 'auth/link/', {'token': token}).status_code == 405   # GET is not offered
 
     def test_links_expire_after_fifteen_minutes(self, policy, public_client):
         public_client.post(BASE + 'auth/request/', {'email': GUEST}, format='json')

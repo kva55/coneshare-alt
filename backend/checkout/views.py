@@ -78,9 +78,13 @@ class AuthLinkView(APIView):
     """Check a link without using it up (so mail scanners that open links cannot burn it)."""
     permission_classes = [permissions.AllowAny]
 
-    @extend_schema(responses={200: dict, 400: dict})
-    def get(self, request):
-        masked = services.peek_login_link(request.query_params.get('token', ''), request)
+    @extend_schema(request=TokenSerializer, responses={200: dict, 400: dict})
+    def post(self, request):
+        # POST, token in the body: an address would be written to access logs.
+        serializer = TokenSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        masked = services.peek_login_link(serializer.validated_data['token'], request)
         if masked is None:
             return Response({"message": services.INVALID_LINK_MESSAGE}, status=status.HTTP_400_BAD_REQUEST)
         return no_store_headers(Response({"email": masked}))
